@@ -1,0 +1,17 @@
+body {
+    font-family: sans-serif;
+    background: #f7f7f7;
+}
+
+.chatbox {
+    max-width: 600px;
+    margin: 50px auto;
+    padding: 20px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 0 10px #ccc;
+}
+
+.user, .ai {
+    margin: 10px 0;
+}
