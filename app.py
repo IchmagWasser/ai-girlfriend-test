@@ -1,13 +1,23 @@
-from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from ollama_chat import get_response
-from fastapi import Request
 
 app = FastAPI()
 
-@app.get("/")
-def root():
-    return PlainTextResponse("Hi Babe, ich bin online 💖")
+# Static-Files-Ordner für CSS/JS
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Template-Ordner für HTML
+templates = Jinja2Templates(directory="templates")
+
+# Startseite (liefert chat.html aus)
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    return templates.TemplateResponse("chat.html", {"request": request})
+
+# Chat-Endpoint für Nachrichten (wird per JS aufgerufen)
 @app.post("/chat")
 async def chat(req: Request):
     data = await req.json()

@@ -5,7 +5,7 @@ async function sendMessage() {
 
     document.getElementById("chat").innerHTML += `<div class="user">Du: ${message}</div>`;
 
-    const response = await fetch("/ask", {
+    const response = await fetch("/chat", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({message})
