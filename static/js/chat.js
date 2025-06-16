@@ -1,16 +1,19 @@
 async function sendMessage() {
     const input = document.getElementById("input");
+    const chat = document.getElementById("chat");
     const message = input.value;
+
+    if (!message.trim()) return;
+
+    chat.innerHTML += `<div><strong>Du:</strong> ${message}</div>`;
     input.value = "";
 
-    document.getElementById("chat").innerHTML += `<div class="user">Du: ${message}</div>`;
-
-    const response = await fetch("/chat", {
+    const res = await fetch("/chat", {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({message})
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message })
     });
 
-    const data = await response.json();
-    document.getElementById("chat").innerHTML += `<div class="ai">Sie: ${data.reply}</div>`;
+    const data = await res.json();
+    chat.innerHTML += `<div><strong>Sie:</strong> ${data.reply}</div>`;
 }
