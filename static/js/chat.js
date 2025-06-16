@@ -12,5 +12,5 @@ async function sendMessage() {
     });
 
     const data = await response.json();
-    document.getElementById("chat").innerHTML += `<div class="ai">Sie: ${data.response}</div>`;
+    document.getElementById("chat").innerHTML += `<div class="ai">Sie: ${data.reply}</div>`;
 }
