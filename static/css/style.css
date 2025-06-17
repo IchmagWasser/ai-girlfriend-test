@@ -1,17 +1,84 @@
+/* Grundlayout */
 body {
-    font-family: sans-serif;
-    background: #f7f7f7;
+    font-family: Arial, sans-serif;
+    background-color: #f2f2f2;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
 }
 
-.chatbox {
-    max-width: 600px;
-    margin: 50px auto;
-    padding: 20px;
-    background: white;
+.container {
+    margin-top: 50px;
+    background-color: white;
     border-radius: 10px;
-    box-shadow: 0 0 10px #ccc;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    width: 90%;
+    max-width: 600px;
+    padding: 20px;
 }
 
-.user, .ai {
-    margin: 10px 0;
+/* Chatfenster */
+#chat {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    height: 400px;
+    padding: 10px;
+    background-color: #f8f8f8;
+    border: 1px solid #ddd;
+    border-radius: 10px;
+    margin-bottom: 20px;
+}
+
+/* Nachrichtenstil */
+.message {
+    margin: 10px;
+    padding: 10px;
+    border-radius: 10px;
+    max-width: 70%;
+    word-wrap: break-word;
+    font-size: 1rem;
+}
+
+.user-message {
+    background-color: #DCF8C6;
+    align-self: flex-end;
+    text-align: right;
+}
+
+.ai-message {
+    background-color: #E6E6E6;
+    align-self: flex-start;
+    text-align: left;
+}
+
+/* Formular-Stil */
+form {
+    display: flex;
+    gap: 10px;
+}
+
+input[type="text"] {
+    flex-grow: 1;
+    padding: 10px;
+    font-size: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+button {
+    padding: 10px 20px;
+    font-size: 1rem;
+    background-color: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: #45a049;
 }
