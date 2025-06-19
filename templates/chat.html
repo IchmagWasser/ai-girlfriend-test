@@ -1,15 +1,75 @@
 <!DOCTYPE html>
-<html>
+<html lang="de">
 <head>
-    <title>KI-Freundin</title>
+    <meta charset="UTF-8">
+    <title>Chat mit deiner KI</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <div class="chatbox">
+    <div class="container">
         <div id="chat"></div>
-        <input id="input" placeholder="Was willst du ihr sagen?">
-        <button onclick="sendMessage()">Senden</button>
+        <form id="chat-form">
+            <input type="text" id="user-input" placeholder="Schreib etwas..." required autocomplete="off">
+            <button type="submit">Senden</button>
+        </form>
     </div>
-    <script src="/static/js/chat.js"></script>
+
+    <!-- JavaScript direkt eingebettet -->
+    <script>
+        const form = document.getElementById("chat-form");
+        const input = document.getElementById("user-input");
+        const chat = document.getElementById("chat");
+
+        // Nachrichten anhängen
+        function appendMessage(sender, text) {
+            const msgDiv = document.createElement("div");
+            msgDiv.classList.add("message", sender === "Du" ? "user-message" : "ai-message");
+            msgDiv.innerHTML = `<strong>${sender}:</strong> ${text}`;
+            chat.appendChild(msgDiv);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        // Verlauf speichern
+        function saveToHistory(sender, text) {
+            const history = JSON.parse(localStorage.getItem("chatHistory")) || [];
+            history.push({ sender, text });
+            localStorage.setItem("chatHistory", JSON.stringify(history));
+        }
+
+        // Verlauf laden
+        function loadHistory() {
+            const history = JSON.parse(localStorage.getItem("chatHistory")) || [];
+            history.forEach(({ sender, text }) => appendMessage(sender, text));
+        }
+
+        // Beim Start Chatverlauf laden
+        loadHistory();
+
+        // Neue Nachricht absenden
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const userText = input.value.trim();
+            if (!userText) return;
+
+            appendMessage("Du", userText);
+            saveToHistory("Du", userText);
+            input.value = "";
+
+            try {
+                const res = await fetch("/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ message: userText })
+                });
+                const data = await res.json();
+                appendMessage("Sie", data.reply);
+                saveToHistory("Sie", data.reply);
+            } catch (error) {
+                const errorMsg = "Nachricht konnte nicht gesendet werden.";
+                appendMessage("Fehler", errorMsg);
+                saveToHistory("Fehler", errorMsg);
+            }
+        });
+    </script>
 </body>
 </html>

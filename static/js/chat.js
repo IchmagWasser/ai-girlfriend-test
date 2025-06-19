@@ -1,19 +1,32 @@
-async function sendMessage() {
-    const input = document.getElementById("input");
-    const chat = document.getElementById("chat");
-    const message = input.value;
+const form = document.getElementById("chat-form");
+const input = document.getElementById("user-input");
+const chat = document.getElementById("chat");
 
-    if (!message.trim()) return;
+form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const userText = input.value.trim();
+    if (!userText) return;
 
-    chat.innerHTML += `<div><strong>Du:</strong> ${message}</div>`;
+    appendMessage("Du", userText);
     input.value = "";
 
-    const res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message })
-    });
+    try {
+        const res = await fetch("/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: userText })
+        });
+        const data = await res.json();
+        appendMessage("Sie", data.reply);
+    } catch (error) {
+        appendMessage("Fehler", "Nachricht konnte nicht gesendet werden.");
+    }
+});
 
-    const data = await res.json();
-    chat.innerHTML += `<div><strong>Sie:</strong> ${data.reply}</div>`;
+function appendMessage(sender, text) {
+    const msgDiv = document.createElement("div");
+    msgDiv.classList.add("message", sender === "Du" ? "user-message" : "ai-message");
+    msgDiv.innerHTML = `<strong>${sender}:</strong> ${text}`;
+    chat.appendChild(msgDiv);
+    chat.scrollTop = chat.scrollHeight;
 }
