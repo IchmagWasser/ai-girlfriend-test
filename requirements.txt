@@ -6,3 +6,4 @@ openai==0.28.0
 python-dotenv
 requests
 chromadb==1.0.3
+itsdangerous
