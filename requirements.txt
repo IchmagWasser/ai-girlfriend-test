@@ -7,3 +7,4 @@ python-dotenv
 requests
 chromadb==1.0.3
 itsdangerous
+python-multipart
