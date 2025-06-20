@@ -1,10 +1,4 @@
-[
-    {
-        "username": "admin",
-        "password": "pass123"
-    },
-    {
-        "username": "max",
-        "password": "geheim"
-    }
-]
+{
+    "admin": "pass123",
+    "max": "geheim"
+}
