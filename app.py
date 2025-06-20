@@ -26,12 +26,14 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # 📄 HTML-Templates
 templates = Jinja2Templates(directory="templates")
 
-# 🏠 Startseite – Weiterleitung zu /chat
+# 🏠 Weiterleitung auf /chat – aber nur, wenn eingeloggt
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    return RedirectResponse("/chat")
+    if not request.session.get("username"):
+        return RedirectResponse("/login", status_code=status.HTTP_302_FOUND)
+    return RedirectResponse("/chat", status_code=status.HTTP_302_FOUND)
 
-# 💬 Chat-Seite anzeigen – nur wenn eingeloggt
+# 💬 Chatseite – mit Username anzeigen
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
     if not request.session.get("username"):
@@ -41,12 +43,12 @@ async def chat_page(request: Request):
         "username": request.session["username"]
     })
 
-# 🔑 Login-Seite anzeigen
+# 🔑 Login-Seite
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse("login.html", {"request": request, "error": ""})
 
-# 🔑 Login-Daten prüfen
+# 🔑 Login-Verarbeitung
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
     if check_login(username, password):
@@ -55,7 +57,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
         return RedirectResponse("/chat", status_code=status.HTTP_302_FOUND)
     return templates.TemplateResponse("login.html", {"request": request, "error": "Login fehlgeschlagen"})
 
-# 🆕 Registrierungsseite anzeigen
+# 🆕 Registrierung anzeigen
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request):
     return templates.TemplateResponse("register.html", {"request": request, "error": ""})
@@ -77,7 +79,7 @@ async def logout(request: Request):
     logging.info(f"Nutzer '{username}' hat sich ausgeloggt.")
     return RedirectResponse("/login")
 
-# 🧠 Chat-API-Endpoint
+# 🤖 Chat-Antwort von der KI
 @app.post("/chat")
 async def chat(req: Request):
     if not req.session.get("username"):
