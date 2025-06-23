@@ -125,3 +125,25 @@ async def chat(req: Request):
 @app.on_event("startup")
 def clear_all_sessions():
     pass
+# 📋 Admin-Ansicht aller Benutzer (unsicher – nur für Tests!)
+@app.get("/admin", response_class=HTMLResponse)
+async def show_users(request: Request):
+    if not request.session.get("username") == "admin":
+        return HTMLResponse("Zugriff verweigert", status_code=403)
+
+    if not os.path.exists("users.json"):
+        return HTMLResponse("Keine Benutzer gefunden.")
+
+    with open("users.json", "r", encoding="utf-8") as f:
+        try:
+            users = json.load(f)
+        except json.JSONDecodeError:
+            return HTMLResponse("Fehler beim Lesen der Datei.")
+
+    # HTML-Tabelle bauen
+    html = "<h1>Registrierte Benutzer</h1><table border='1'><tr><th>Benutzername</th><th>Passwort-Hash</th><th>Frage</th><th>Antwort</th></tr>"
+    for user, data in users.items():
+        html += f"<tr><td>{user}</td><td>{data.get('password')}</td><td>{data.get('question')}</td><td>{data.get('answer')}</td></tr>"
+    html += "</table>"
+
+    return HTMLResponse(html)
