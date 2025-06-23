@@ -8,6 +8,8 @@ from auth import check_login, save_user
 from dotenv import load_dotenv
 import os
 import logging
+import json
+import re
 
 # 🔐 .env laden
 load_dotenv()
@@ -26,13 +28,34 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # 📄 HTML-Templates
 templates = Jinja2Templates(directory="templates")
 
-# 🏠 Weiterleitung auf /chat – aber nur, wenn eingeloggt
+# 🔐 Username sichern (z. B. gegen "../" oder Sonderzeichen)
+def sanitize_username(username: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9_-]', '_', username)
+
+# 📦 Chatverlauf laden
+def get_user_history(username: str):
+    safe_name = sanitize_username(username)
+    path = f"user_chats/{safe_name}.json"
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+# 📦 Chatverlauf speichern
+def save_user_history(username: str, history: list):
+    os.makedirs("user_chats", exist_ok=True)
+    safe_name = sanitize_username(username)
+    path = f"user_chats/{safe_name}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(history, f, ensure_ascii=False, indent=2)
+
+# 🏠 Startseite → leitet weiter
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    request.session.clear()  # 🧹 Session löschen beim Start
+    request.session.clear()
     return RedirectResponse("/login", status_code=status.HTTP_302_FOUND)
 
-# 💬 Chatseite – mit Username anzeigen
+# 💬 Chatseite
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
     if not request.session.get("username"):
@@ -81,24 +104,24 @@ async def logout(request: Request):
 # 🤖 Chat-Antwort von der KI
 @app.post("/chat")
 async def chat(req: Request):
-    if not req.session.get("username"):
+    username = req.session.get("username")
+    if not username:
         return {"reply": "Nicht eingeloggt."}
 
     data = await req.json()
     user_message = data.get("message", "")
 
-    chat_history = req.session.get("chat_history", [])
+    chat_history = get_user_history(username)
     chat_history.append({"role": "user", "content": user_message})
 
     response_text = get_response(user_message)
-
     chat_history.append({"role": "assistant", "content": response_text})
-    req.session["chat_history"] = chat_history
+
+    save_user_history(username, chat_history)
 
     return {"reply": response_text}
 
-# 🧹 Optional: Sessions beim Start löschen (bei Datenbank oder Redis)
+# 🧹 Startup-Hook
 @app.on_event("startup")
 def clear_all_sessions():
-    # ⚠️ Nicht nötig bei Cookie-basierten Sessions
     pass

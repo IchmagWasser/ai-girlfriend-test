@@ -1,4 +1,12 @@
 {
-    "admin": "pass123",
-    "max": "geheim"
+  "admin": {
+    "password": "hashed_pw",
+    "question": "Wie heißt dein erster Hund?",
+    "answer": "hashed_antwort"
+  },
+  "max": {
+    "password": "hashed_pw",
+    "question": "Wie heißt dein erster Hund?",
+    "answer": "hashed_antwort"
+  }
 }
