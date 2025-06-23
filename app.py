@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 import os
 import logging
 import json
-import re
 
 # 🔐 .env laden
 load_dotenv()
@@ -28,34 +27,28 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # 📄 HTML-Templates
 templates = Jinja2Templates(directory="templates")
 
-# 🔐 Username sichern (z. B. gegen "../" oder Sonderzeichen)
-def sanitize_username(username: str) -> str:
-    return re.sub(r'[^a-zA-Z0-9_-]', '_', username)
 
-# 📦 Chatverlauf laden
+# 🔁 Verlauf pro Benutzer speichern/laden
 def get_user_history(username: str):
-    safe_name = sanitize_username(username)
-    path = f"user_chats/{safe_name}.json"
+    path = f"user_chats/{username}.json"
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r") as f:
             return json.load(f)
     return []
 
-# 📦 Chatverlauf speichern
 def save_user_history(username: str, history: list):
     os.makedirs("user_chats", exist_ok=True)
-    safe_name = sanitize_username(username)
-    path = f"user_chats/{safe_name}.json"
-    with open(path, "w", encoding="utf-8") as f:
+    path = f"user_chats/{username}.json"
+    with open(path, "w") as f:
         json.dump(history, f, ensure_ascii=False, indent=2)
 
-# 🏠 Startseite → leitet weiter
+# 🏠 Weiterleitung auf /chat – aber nur, wenn eingeloggt
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    request.session.clear()
+    request.session.clear()  # 🧹 Session löschen beim Start
     return RedirectResponse("/login", status_code=status.HTTP_302_FOUND)
 
-# 💬 Chatseite
+# 💬 Chatseite – mit Username anzeigen
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
     if not request.session.get("username"):
@@ -84,10 +77,16 @@ async def login(request: Request, username: str = Form(...), password: str = For
 async def register_page(request: Request):
     return templates.TemplateResponse("register.html", {"request": request, "error": ""})
 
-# 🆕 Registrierung verarbeiten
+# 🆕 Registrierung verarbeiten mit Frage & Antwort
 @app.post("/register")
-async def register(request: Request, username: str = Form(...), password: str = Form(...)):
-    success = save_user(username, password)
+async def register(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    question: str = Form(...),
+    answer: str = Form(...)
+):
+    success = save_user(username, password, question, answer)
     if success:
         logging.info(f"Nutzer '{username}' registriert.")
         return RedirectResponse("/login", status_code=status.HTTP_302_FOUND)
@@ -111,17 +110,18 @@ async def chat(req: Request):
     data = await req.json()
     user_message = data.get("message", "")
 
+    # Verlauf laden, Nachricht hinzufügen, speichern
     chat_history = get_user_history(username)
     chat_history.append({"role": "user", "content": user_message})
 
     response_text = get_response(user_message)
-    chat_history.append({"role": "assistant", "content": response_text})
 
+    chat_history.append({"role": "assistant", "content": response_text})
     save_user_history(username, chat_history)
 
     return {"reply": response_text}
 
-# 🧹 Startup-Hook
+# 🧹 Optional: Sessions beim Start löschen (nicht nötig bei Cookie-Sessions)
 @app.on_event("startup")
 def clear_all_sessions():
     pass
