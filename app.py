@@ -29,9 +29,8 @@ templates = Jinja2Templates(directory="templates")
 # 🏠 Weiterleitung auf /chat – aber nur, wenn eingeloggt
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    if not request.session.get("username"):
-        return RedirectResponse("/login", status_code=status.HTTP_302_FOUND)
-    return RedirectResponse("/chat", status_code=status.HTTP_302_FOUND)
+    request.session.clear()  # 🧹 Session löschen beim Start
+    return RedirectResponse("/login", status_code=status.HTTP_302_FOUND)
 
 # 💬 Chatseite – mit Username anzeigen
 @app.get("/chat", response_class=HTMLResponse)
