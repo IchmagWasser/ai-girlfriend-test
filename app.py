@@ -97,3 +97,9 @@ async def chat(req: Request):
     req.session["chat_history"] = chat_history
 
     return {"reply": response_text}
+
+# 🧹 Optional: Sessions beim Start löschen (bei Datenbank oder Redis)
+@app.on_event("startup")
+def clear_all_sessions():
+    # ⚠️ Nicht nötig bei Cookie-basierten Sessions
+    pass
