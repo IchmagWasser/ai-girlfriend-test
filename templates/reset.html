@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Passwort zurücksetzen</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <h2>Passwort zurücksetzen</h2>
+
+  <form method="post">
+    <input type="text" name="username" placeholder="Benutzername" required><br>
+    <input type="text" name="answer" placeholder="Antwort auf Sicherheitsfrage" required><br>
+    <input type="password" name="new_password" placeholder="Neues Passwort" required><br>
+    <button type="submit">Zurücksetzen</button>
+  </form>
+
+  <p><a href="/login">Zurück zum Login</a></p>
+
+  {% if error %}
+    <p style="color: red;">{{ error }}</p>
+  {% endif %}
+  {% if success %}
+    <p style="color: green;">{{ success }}</p>
+  {% endif %}
+</body>
+</html>
