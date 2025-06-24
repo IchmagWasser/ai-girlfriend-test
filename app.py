@@ -147,3 +147,23 @@ async def show_users(request: Request):
     html += "</table>"
 
     return HTMLResponse(html)
+# 🔐 Admin – Alle Benutzer anzeigen
+@app.get("/admin/users", response_class=HTMLResponse)
+async def admin_users(request: Request):
+    username = request.session.get("username")
+    if username != "admin":
+        return RedirectResponse("/login", status_code=302)
+
+    users = {}
+    if os.path.exists("users.json"):
+        with open("users.json", "r", encoding="utf-8") as f:
+            try:
+                users = json.load(f)
+            except json.JSONDecodeError:
+                pass
+
+    return templates.TemplateResponse("admin_users.html", {
+        "request": request,
+        "users": users,
+        "admin": username
+    })

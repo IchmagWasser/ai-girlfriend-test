@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin – Benutzerübersicht</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <h1>👑 Adminbereich: Benutzerübersicht</h1>
+
+    <table border="1" cellpadding="10">
+        <tr>
+            <th>Benutzername</th>
+            <th>Passwort-Hash</th>
+            <th>Sicherheitsfrage</th>
+        </tr>
+        {% for name, data in users.items() %}
+        <tr>
+            <td>{{ name }}</td>
+            <td>{{ data.password }}</td>
+            <td>{{ data.question }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+
+    <br>
+    <a href="/logout">Logout</a> | <a href="/chat">Zurück zum Chat</a>
+</body>
+</html>
