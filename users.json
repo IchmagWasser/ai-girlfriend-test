@@ -1,6 +1,6 @@
 {
   "admin": {
-    "password": "hashed_pw",
+    "password": "1234",
     "question": "Wie heißt dein erster Hund?",
     "answer": "hashed_antwort"
   },
