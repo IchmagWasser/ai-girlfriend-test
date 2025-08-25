@@ -1,28 +1,125 @@
 <!DOCTYPE html>
-<html>
+<html lang="de">
 <head>
+    <meta charset="UTF-8">
     <title>Admin – Benutzerübersicht</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        h1, h2 {
+            margin-top: 30px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 10px;
+            text-align: center;
+        }
+
+        form {
+            display: inline-block;
+            margin: 2px;
+        }
+
+        input[type="password"] {
+            padding: 5px;
+            font-size: 0.9rem;
+            width: 150px;
+        }
+
+        button {
+            padding: 5px 10px;
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+
+        button.delete {
+            background-color: red;
+            color: white;
+        }
+
+        button.block {
+            background-color: orange;
+            color: white;
+        }
+
+        button.unblock {
+            background-color: green;
+            color: white;
+        }
+    </style>
 </head>
 <body>
     <h1>👑 Adminbereich: Benutzerübersicht</h1>
 
-    <table border="1" cellpadding="10">
+    <table>
         <tr>
             <th>Benutzername</th>
-            <th>Passwort-Hash</th>
-            <th>Sicherheitsfrage</th>
+            <th>Blockiert</th>
+            <th>Aktionen</th>
         </tr>
         {% for name, data in users.items() %}
         <tr>
             <td>{{ name }}</td>
-            <td>{{ data.password }}</td>
-            <td>{{ data.question }}</td>
+            <td>{{ "✅" if data.get("blocked") else "❌" }}</td>
+            <td>
+                {% if name != "admin" %}
+                    <!-- Blockieren / Freischalten -->
+                    <form method="post" action="/admin/toggle-block">
+                        <input type="hidden" name="username" value="{{ name }}">
+                        <button class="{{ 'unblock' if data.get('blocked') else 'block' }}" type="submit">
+                            {% if data.get("blocked") %}Freischalten{% else %}Blockieren{% endif %}
+                        </button>
+                    </form>
+
+                    <!-- Verlauf anzeigen -->
+                    <form method="get" action="/admin/history/{{ name }}">
+                        <button type="submit">Verlauf</button>
+                    </form>
+
+                    <!-- Verlauf löschen -->
+                    <form method="post" action="/admin/delete-history">
+                        <input type="hidden" name="username" value="{{ name }}">
+                        <button type="submit">Verlauf löschen</button>
+                    </form>
+
+                    <!-- Passwort ändern -->
+                    <form method="post" action="/admin/change-user-password">
+                        <input type="hidden" name="username" value="{{ name }}">
+                        <input type="password" name="new_password" placeholder="Neues Passwort" required>
+                        <button type="submit">Passwort ändern</button>
+                    </form>
+
+                    <!-- Benutzer löschen -->
+                    <form method="post" action="/admin/delete-user">
+                        <input type="hidden" name="username" value="{{ name }}">
+                        <button class="delete" type="submit">Löschen</button>
+                    </form>
+                {% else %}
+                    <i>Admin – keine Aktionen</i>
+                {% endif %}
+            </td>
         </tr>
         {% endfor %}
     </table>
 
-    <br>
-    <a href="/logout">Logout</a> | <a href="/chat">Zurück zum Chat</a>
+    <h2>📁 CSV-Export</h2>
+    <form method="get" action="/admin/export-csv">
+        <button type="submit">Alle Benutzer als CSV herunterladen</button>
+    </form>
+
+    <br><br>
+    <a href="/chat">🔙 Zurück zum Chat</a> |
+    <a href="/logout">🚪 Logout</a>
 </body>
 </html>
