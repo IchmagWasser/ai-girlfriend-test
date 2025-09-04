@@ -2,124 +2,619 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <title>Admin – Benutzerübersicht</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Benutzerverwaltung</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: Arial, sans-serif;
-            padding: 20px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
         }
 
-        h1, h2 {
-            margin-top: 30px;
+        .admin-header {
+            background: linear-gradient(135deg, #16213e 0%, #0f1419 100%);
+            border-bottom: 3px solid #e74c3c;
+            padding: 1.5rem 2rem;
+            box-shadow: 0 2px 20px rgba(231, 76, 60, 0.2);
         }
 
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
+        .admin-nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1400px;
+            margin: 0 auto;
         }
 
-        th, td {
-            border: 1px solid #ccc;
-            padding: 10px;
+        .admin-logo {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .admin-logo-icon {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            box-shadow: 0 5px 15px rgba(231, 76, 60, 0.3);
+        }
+
+        .admin-title {
+            color: #e74c3c;
+            font-size: 1.8rem;
+            font-weight: 700;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .admin-subtitle {
+            color: #bdc3c7;
+            font-size: 0.9rem;
+            margin-top: 0.25rem;
+        }
+
+        .admin-user-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            background: rgba(231, 76, 60, 0.1);
+            padding: 0.75rem 1.5rem;
+            border-radius: 25px;
+            border: 1px solid rgba(231, 76, 60, 0.3);
+        }
+
+        .admin-avatar {
+            width: 35px;
+            height: 35px;
+            background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .nav-link {
+            color: #bdc3c7;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .nav-link:hover {
+            background: rgba(231, 76, 60, 0.2);
+            color: #e74c3c;
+        }
+
+        .main-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            border: 1px solid #34495e;
+            border-radius: 15px;
+            padding: 2rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--accent-color, #3498db);
+        }
+
+        .stat-card:nth-child(1) { --accent-color: #3498db; }
+        .stat-card:nth-child(2) { --accent-color: #2ecc71; }
+        .stat-card:nth-child(3) { --accent-color: #f39c12; }
+        .stat-card:nth-child(4) { --accent-color: #e74c3c; }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--accent-color, #3498db);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: #bdc3c7;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .users-section {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            border: 1px solid #34495e;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .section-header {
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+            padding: 2rem;
             text-align: center;
         }
 
-        form {
-            display: inline-block;
-            margin: 2px;
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
         }
 
-        input[type="password"] {
-            padding: 5px;
-            font-size: 0.9rem;
+        .section-subtitle {
+            color: rgba(255,255,255,0.8);
+            font-size: 1rem;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        .users-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .users-table th {
+            background: #34495e;
+            color: #ecf0f1;
+            padding: 1.5rem 1rem;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #2c3e50;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .users-table td {
+            padding: 1.5rem 1rem;
+            border-bottom: 1px solid #34495e;
+            vertical-align: middle;
+        }
+
+        .users-table tbody tr {
+            transition: background-color 0.3s ease;
+        }
+
+        .users-table tbody tr:hover {
+            background: rgba(52, 73, 94, 0.3);
+        }
+
+        .user-cell {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .user-avatar-small {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            font-weight: bold;
+        }
+
+        .user-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .username {
+            font-weight: 600;
+            color: #ecf0f1;
+            font-size: 1rem;
+        }
+
+        .user-id {
+            font-size: 0.8rem;
+            color: #95a5a6;
+        }
+
+        .status-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-active {
+            background: rgba(46, 204, 113, 0.2);
+            color: #2ecc71;
+            border: 1px solid #2ecc71;
+        }
+
+        .status-blocked {
+            background: rgba(231, 76, 60, 0.2);
+            color: #e74c3c;
+            border: 1px solid #e74c3c;
+        }
+
+        .role-admin {
+            background: rgba(241, 196, 15, 0.2);
+            color: #f1c40f;
+            border: 1px solid #f1c40f;
+        }
+
+        .role-user {
+            background: rgba(52, 152, 219, 0.2);
+            color: #3498db;
+            border: 1px solid #3498db;
+        }
+
+        .actions-cell {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-toggle {
+            background: #f39c12;
+            color: white;
+        }
+
+        .btn-toggle:hover {
+            background: #e67e22;
+            transform: translateY(-2px);
+        }
+
+        .btn-unblock {
+            background: #2ecc71;
+            color: white;
+        }
+
+        .btn-unblock:hover {
+            background: #27ae60;
+            transform: translateY(-2px);
+        }
+
+        .btn-history {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-history:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+        }
+
+        .btn-delete {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .btn-delete:hover {
+            background: #c0392b;
+            transform: translateY(-2px);
+        }
+
+        .btn-password {
+            background: #9b59b6;
+            color: white;
+        }
+
+        .btn-password:hover {
+            background: #8e44ad;
+            transform: translateY(-2px);
+        }
+
+        .password-input {
+            padding: 0.4rem 0.8rem;
+            border: 1px solid #34495e;
+            border-radius: 5px;
+            background: #2c3e50;
+            color: #ecf0f1;
+            font-size: 0.85rem;
             width: 150px;
         }
 
-        button {
-            padding: 5px 10px;
-            font-size: 0.9rem;
+        .export-section {
+            margin-top: 3rem;
+            text-align: center;
+            padding: 2rem;
+            background: rgba(52, 73, 94, 0.3);
+            border-radius: 15px;
+            border: 1px solid #34495e;
+        }
+
+        .export-btn {
+            background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+            color: white;
+            padding: 1rem 2rem;
+            border: none;
+            border-radius: 25px;
+            font-size: 1.1rem;
+            font-weight: 600;
             cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
         }
 
-        button.delete {
-            background-color: red;
-            color: white;
+        .export-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(46, 204, 113, 0.3);
         }
 
-        button.block {
-            background-color: orange;
-            color: white;
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: #7f8c8d;
         }
 
-        button.unblock {
-            background-color: green;
-            color: white;
+        .empty-state h3 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: #95a5a6;
+        }
+
+        .error-message {
+            background: rgba(231, 76, 60, 0.1);
+            border: 1px solid #e74c3c;
+            color: #e74c3c;
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            text-align: center;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .admin-nav {
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            .main-content {
+                padding: 1rem;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .actions-cell {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .action-btn {
+                justify-content: center;
+            }
         }
     </style>
 </head>
 <body>
-    <h1>👑 Adminbereich: Benutzerübersicht</h1>
+    <header class="admin-header">
+        <nav class="admin-nav">
+            <div class="admin-logo">
+                <div class="admin-logo-icon">👑</div>
+                <div>
+                    <h1 class="admin-title">Admin Control Panel</h1>
+                    <p class="admin-subtitle">Benutzerverwaltung & Systemkontrolle</p>
+                </div>
+            </div>
+            <div class="admin-user-info">
+                <div class="admin-avatar">A</div>
+                <div>Administrator</div>
+                <div class="nav-links">
+                    <a href="/chat" class="nav-link">💬 Chat</a>
+                    <a href="/logout" class="nav-link">🚪 Abmelden</a>
+                </div>
+            </div>
+        </nav>
+    </header>
 
-    <table>
-        <tr>
-            <th>Benutzername</th>
-            <th>Blockiert</th>
-            <th>Aktionen</th>
-        </tr>
-        {% for name, data in users.items() %}
-        <tr>
-            <td>{{ name }}</td>
-            <td>{{ "✅" if data.get("blocked") else "❌" }}</td>
-            <td>
-                {% if name != "admin" %}
-                    <!-- Blockieren / Freischalten -->
-                    <form method="post" action="/admin/toggle-block">
-                        <input type="hidden" name="username" value="{{ name }}">
-                        <button class="{{ 'unblock' if data.get('blocked') else 'block' }}" type="submit">
-                            {% if data.get("blocked") %}Freischalten{% else %}Blockieren{% endif %}
-                        </button>
-                    </form>
+    <main class="main-content">
+        {% if error %}
+            <div class="error-message">{{ error }}</div>
+        {% endif %}
 
-                    <!-- Verlauf anzeigen -->
-                    <form method="get" action="/admin/history/{{ name }}">
-                        <button type="submit">Verlauf</button>
-                    </form>
+        <!-- Statistics -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-number">{{ users|length }}</div>
+                <div class="stat-label">Gesamt Benutzer</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ users.values()|selectattr("blocked", "equalto", false)|list|length }}</div>
+                <div class="stat-label">Aktive Benutzer</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ users.values()|selectattr("is_admin", "equalto", true)|list|length }}</div>
+                <div class="stat-label">Administratoren</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ users.values()|selectattr("blocked", "equalto", true)|list|length }}</div>
+                <div class="stat-label">Gesperrte Benutzer</div>
+            </div>
+        </div>
 
-                    <!-- Verlauf löschen -->
-                    <form method="post" action="/admin/delete-history">
-                        <input type="hidden" name="username" value="{{ name }}">
-                        <button type="submit">Verlauf löschen</button>
-                    </form>
+        <!-- Users Table -->
+        <div class="users-section">
+            <div class="section-header">
+                <h2 class="section-title">Benutzerverwaltung</h2>
+                <p class="section-subtitle">Verwalte alle registrierten Benutzer und deren Berechtigungen</p>
+            </div>
 
-                    <!-- Passwort ändern -->
-                    <form method="post" action="/admin/change-user-password">
-                        <input type="hidden" name="username" value="{{ name }}">
-                        <input type="password" name="new_password" placeholder="Neues Passwort" required>
-                        <button type="submit">Passwort ändern</button>
-                    </form>
+            {% if users %}
+                <div class="table-container">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>Benutzer</th>
+                                <th>Rolle</th>
+                                <th>Status</th>
+                                <th>Aktionen</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for username, user_data in users.items() %}
+                            <tr>
+                                <td>
+                                    <div class="user-cell">
+                                        <div class="user-avatar-small">
+                                            {{ username[0]|upper }}
+                                        </div>
+                                        <div class="user-info">
+                                            <div class="username">{{ username }}</div>
+                                            <div class="user-id">ID: {{ loop.index }}</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    {% if user_data.get('is_admin') %}
+                                        <span class="status-badge role-admin">Administrator</span>
+                                    {% else %}
+                                        <span class="status-badge role-user">Benutzer</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if user_data.get('blocked') %}
+                                        <span class="status-badge status-blocked">Gesperrt</span>
+                                    {% else %}
+                                        <span class="status-badge status-active">Aktiv</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if username != "admin" %}
+                                        <div class="actions-cell">
+                                            <!-- Block/Unblock -->
+                                            <form method="post" action="/admin/toggle-block" style="display: inline;">
+                                                <input type="hidden" name="username" value="{{ username }}">
+                                                <button type="submit" class="action-btn {% if user_data.get('blocked') %}btn-unblock{% else %}btn-toggle{% endif %}">
+                                                    {% if user_data.get('blocked') %}
+                                                        🔓 Freischalten
+                                                    {% else %}
+                                                        🔒 Sperren
+                                                    {% endif %}
+                                                </button>
+                                            </form>
 
-                    <!-- Benutzer löschen -->
-                    <form method="post" action="/admin/delete-user">
-                        <input type="hidden" name="username" value="{{ name }}">
-                        <button class="delete" type="submit">Löschen</button>
-                    </form>
-                {% else %}
-                    <i>Admin – keine Aktionen</i>
-                {% endif %}
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
+                                            <!-- View History -->
+                                            <a href="/admin/history/{{ username }}" class="action-btn btn-history">
+                                                📜 Verlauf
+                                            </a>
 
-    <h2>📁 CSV-Export</h2>
-    <form method="get" action="/admin/export-csv">
-        <button type="submit">Alle Benutzer als CSV herunterladen</button>
-    </form>
+                                            <!-- Delete History -->
+                                            <form method="post" action="/admin/delete-history" style="display: inline;">
+                                                <input type="hidden" name="username" value="{{ username }}">
+                                                <button type="submit" class="action-btn btn-delete" onclick="return confirm('Chat-Verlauf wirklich löschen?')">
+                                                    🗑️ Verlauf löschen
+                                                </button>
+                                            </form>
 
-    <br><br>
-    <a href="/chat">🔙 Zurück zum Chat</a> |
-    <a href="/logout">🚪 Logout</a>
-</body>
-</html>
+                                            <!-- Change Password -->
+                                            <form method="post" action="/admin/change-user-password" style="display: inline-flex; gap: 0.5rem; align-items: center;">
+                                                <input type="hidden" name="username" value="{{ username }}">
+                                                <input type="password" name="new_password" placeholder="Neues Passwort" class="password-input" required>
+                                                <button type="submit" class="action-btn btn-password">
+                                                    🔑 Ändern
+                                                </button>
+                                            </form>
+
+                                            <!-- Delete User -->
+                                            <form method="post" action="/admin/delete-user" style="display: inline;">
+                                                <input type="hidden" name="username" value="{{ username }}">
+                                                <button type="submit" class="action-btn btn-delete" onclick="return confirm('Benutzer {{ username }} wirklich komplett löschen?')">
+                                                    ❌ Löschen
+                                                </button>
+                                            </form>
+                                        </div>
+                                    {% else %}
+                                        <span style="color: #f1c40f; font-style: italic;">👑 System-Administrator</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    <h3>Keine Benutzer vorhanden</h3>
+                    <p>Es sind noch keine Benutzer im System registriert.</p>
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Export Section -->
+        <div class="export-section">
+            <h3 style="color: #ecf0f1; margin-bottom: 1rem;">Daten Export</h3>
+            <a href="/admin/export-csv" class="export-btn">
+                📊 Benutzerdaten als CSV exportieren
+            </a>
+        </div>
+    </main>
+
+    <script>
+        // Confirmation dialogs for destructive actions
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add loading states to buttons
+            const forms = document.querySelectorAll('form');
+            forms.forEach(form => {
+                form.addEventListener('submit', function(e) {
+                    const button = this.querySelector('button[type="submit"]');
+                    if (button && !button.onclick) { // Skip if it has onclick (confirmation)

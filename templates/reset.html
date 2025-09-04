@@ -1,27 +1,373 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <title>Passwort zurücksetzen</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KI-Chat - Passwort zurücksetzen</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Animated background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: 
+                radial-gradient(circle at 25% 75%, rgba(255,255,255,0.1) 2px, transparent 2px),
+                radial-gradient(circle at 75% 25%, rgba(255,255,255,0.1) 1px, transparent 1px);
+            background-size: 150px 150px, 100px 100px;
+            animation: drift 20s infinite linear;
+            pointer-events: none;
+        }
+
+        @keyframes drift {
+            0% { transform: translate(0, 0) rotate(0deg); }
+            100% { transform: translate(-75px, -75px) rotate(360deg); }
+        }
+
+        .reset-container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 25px;
+            padding: 3rem;
+            width: 100%;
+            max-width: 480px;
+            box-shadow: 0 15px 50px rgba(0, 0, 0, 0.1);
+            position: relative;
+            animation: slideIn 0.8s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: scale(0.9) translateY(30px); opacity: 0; }
+            to { transform: scale(1) translateY(0); opacity: 1; }
+        }
+
+        .logo-section {
+            text-align: center;
+            margin-bottom: 2.5rem;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(45deg, #ffd32a, #ff6b6b);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5rem;
+            margin: 0 auto 1rem;
+            animation: rotate 3s infinite linear;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .logo-text {
+            color: white;
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .logo-subtitle {
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 1rem;
+            line-height: 1.4;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+            position: relative;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 1rem 1.5rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            color: white;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .form-input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: rgba(255, 255, 255, 0.5);
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .reset-btn {
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, #ff9ff3 0%, #f368e0 100%);
+            border: none;
+            border-radius: 15px;
+            color: white;
+            font-size: 1.1rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 5px 20px rgba(243, 104, 224, 0.3);
+        }
+
+        .reset-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(243, 104, 224, 0.4);
+        }
+
+        .reset-btn:active {
+            transform: translateY(-1px);
+        }
+
+        .error-message {
+            background: rgba(255, 71, 87, 0.9);
+            color: white;
+            padding: 1rem;
+            border-radius: 15px;
+            margin-bottom: 1.5rem;
+            text-align: center;
+            font-weight: 500;
+            backdrop-filter: blur(10px);
+            animation: shake 0.5s ease-in-out;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+
+        .success-message {
+            background: rgba(46, 213, 115, 0.9);
+            color: white;
+            padding: 1rem;
+            border-radius: 15px;
+            margin-bottom: 1.5rem;
+            text-align: center;
+            font-weight: 500;
+            backdrop-filter: blur(10px);
+        }
+
+        .links-section {
+            text-align: center;
+            margin-top: 1.5rem;
+        }
+
+        .auth-link {
+            color: rgba(255, 255, 255, 0.9);
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            padding: 0.5rem 1rem;
+            border-radius: 10px;
+            display: inline-block;
+        }
+
+        .auth-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            transform: translateY(-1px);
+        }
+
+        .divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            margin: 2rem 0 1.5rem;
+        }
+
+        .info-box {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            padding: 1.5rem;
+            margin-top: 1.5rem;
+            font-size: 0.9rem;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .info-box h4 {
+            color: white;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+        }
+
+        .info-box ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .info-box li {
+            margin-bottom: 0.5rem;
+            padding-left: 1.5rem;
+            position: relative;
+        }
+
+        .info-box li::before {
+            content: 'ℹ️';
+            position: absolute;
+            left: 0;
+            font-size: 0.8rem;
+        }
+
+        /* Responsive */
+        @media (max-width: 480px) {
+            .reset-container {
+                padding: 2rem;
+                margin: 1rem;
+            }
+            
+            .logo {
+                width: 60px;
+                height: 60px;
+                font-size: 2rem;
+            }
+            
+            .logo-text {
+                font-size: 1.5rem;
+            }
+        }
+    </style>
 </head>
 <body>
-  <h2>Passwort zurücksetzen</h2>
+    <div class="reset-container">
+        <div class="logo-section">
+            <div class="logo">🔐</div>
+            <h1 class="logo-text">Passwort Reset</h1>
+            <p class="logo-subtitle">Setze dein Passwort mit der Sicherheitsfrage zurück</p>
+        </div>
 
-  <form method="post">
-    <input type="text" name="username" placeholder="Benutzername" required><br>
-    <input type="text" name="answer" placeholder="Antwort auf Sicherheitsfrage" required><br>
-    <input type="password" name="new_password" placeholder="Neues Passwort" required><br>
-    <button type="submit">Zurücksetzen</button>
-  </form>
+        {% if error %}
+            <div class="error-message">{{ error }}</div>
+        {% endif %}
 
-  <p><a href="/login">Zurück zum Login</a></p>
+        {% if success %}
+            <div class="success-message">{{ success }}</div>
+        {% endif %}
 
-  {% if error %}
-    <p style="color: red;">{{ error }}</p>
-  {% endif %}
-  {% if success %}
-    <p style="color: green;">{{ success }}</p>
-  {% endif %}
+        <form method="post" action="/reset" id="resetForm">
+            <div class="form-group">
+                <input 
+                    type="text" 
+                    name="username" 
+                    class="form-input" 
+                    placeholder="Dein Benutzername" 
+                    required
+                    id="username"
+                >
+            </div>
+
+            <div class="form-group">
+                <input 
+                    type="text" 
+                    name="answer" 
+                    class="form-input" 
+                    placeholder="Antwort auf deine Sicherheitsfrage" 
+                    required
+                    id="answer"
+                >
+            </div>
+
+            <div class="form-group">
+                <input 
+                    type="password" 
+                    name="new_password" 
+                    class="form-input" 
+                    placeholder="Neues Passwort (min. 6 Zeichen)" 
+                    required
+                    minlength="6"
+                    id="newPassword"
+                >
+            </div>
+
+            <button type="submit" class="reset-btn" id="submitBtn">
+                Passwort zurücksetzen
+            </button>
+        </form>
+
+        <div class="divider"></div>
+
+        <div class="links-section">
+            <a href="/login" class="auth-link">Zurück zur Anmeldung</a>
+        </div>
+
+        <div class="info-box">
+            <h4>📝 So funktioniert der Reset:</h4>
+            <ul>
+                <li>Gib deinen Benutzernamen ein</li>
+                <li>Beantworte deine Sicherheitsfrage korrekt</li>
+                <li>Wähle ein neues sicheres Passwort</li>
+                <li>Du wirst automatisch zur Anmeldung weitergeleitet</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('resetForm');
+            const submitBtn = document.getElementById('submitBtn');
+
+            // Form submission handler
+            form.addEventListener('submit', function(e) {
+                const newPassword = document.getElementById('newPassword').value;
+                
+                if (newPassword.length < 6) {
+                    e.preventDefault();
+                    alert('Das neue Passwort muss mindestens 6 Zeichen lang sein!');
+                    return;
+                }
+
+                // Show loading state
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = 'Passwort wird zurückgesetzt...';
+            });
+
+            // Input focus effects
+            const inputs = document.querySelectorAll('.form-input');
+            inputs.forEach(input => {
+                input.addEventListener('focus', function() {
+                    this.parentElement.style.transform = 'scale(1.02)';
+                });
+                
+                input.addEventListener('blur', function() {
+                    this.parentElement.style.transform = 'scale(1)';
+                });
+            });
+
+            // Auto focus first input
+            document.getElementById('username').focus();
+        });
+    </script>
 </body>
 </html>

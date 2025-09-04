@@ -1,103 +1,96 @@
+import sqlite3
 import hashlib
-import json
 import os
 
-USER_DATA_FILE = "users.json"
+DB_PATH = "users.db"
 
-# 🔐 Passwort hashen mit SHA256
+# 🗄️ Datenbank initialisieren (nur beim ersten Start notwendig)
+def init_db():
+    if not os.path.exists(DB_PATH):
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password TEXT NOT NULL,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+# 🔐 Passwort-Hashing mit SHA256
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
-# 💾 Benutzer speichern (inkl. Sicherheitsfrage & Antwort)
-def save_user(username, password, question, answer):
-    password_hash = hash_password(password)
+# 🆕 Benutzer registrieren
+def save_user(username: str, password: str, question: str, answer: str) -> bool:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        if cursor.fetchone():
+            return False  # Benutzer existiert bereits
 
-    # Bestehende Benutzerdaten laden
-    if os.path.exists(USER_DATA_FILE):
-        with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
-            try:
-                users = json.load(f)
-            except json.JSONDecodeError:
-                users = {}
-    else:
-        users = {}
-
-    if username in users:
-        return False  # Benutzer existiert bereits
-
-    users[username] = {
-        "password": password_hash,
-        "question": question,
-        "answer": answer
-    }
-
-    with open(USER_DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-
-    return True
-
-# 🔑 Login prüfen
-def check_login(username, password):
-    if not os.path.exists(USER_DATA_FILE):
+        hashed_pw = hash_password(password)
+        cursor.execute(
+            "INSERT INTO users (username, password, question, answer) VALUES (?, ?, ?, ?)",
+            (username, hashed_pw, question, answer)
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        print("Fehler bei save_user:", e)
         return False
+    finally:
+        conn.close()
 
-    with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
-        try:
-            users = json.load(f)
-        except json.JSONDecodeError:
-            return False
-
-    if username not in users:
+# 🔐 Login überprüfen
+def check_login(username: str, password: str) -> bool:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT password FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        if row:
+            return row[0] == hash_password(password)
         return False
+    finally:
+        conn.close()
 
-    password_hash = hash_password(password)
-    return users[username]["password"] == password_hash
+# 🔄 Passwort zurücksetzen
+def reset_password(username: str, new_password: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        hashed_pw = hash_password(new_password)
+        cursor.execute(
+            "UPDATE users SET password = ? WHERE username = ?",
+            (hashed_pw, username)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
-# ❓ Sicherheitsfrage abrufen
-def get_security_question(username):
-    if not os.path.exists(USER_DATA_FILE):
-        return None
+# ❓ Sicherheitsfrage holen
+def get_security_question(username: str) -> str:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT question FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        return row[0] if row else ""
+    finally:
+        conn.close()
 
-    with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
-        try:
-            users = json.load(f)
-        except json.JSONDecodeError:
-            return None
-
-    return users.get(username, {}).get("question")
-
-# ✅ Antwort auf Sicherheitsfrage prüfen
-def verify_security_answer(username, answer) -> bool:
-    if not os.path.exists(USER_DATA_FILE):
-        return False
-
-    with open(USER_DATA_FILE, "r", encoding="utf-8") as f:
-        try:
-            users = json.load(f)
-        except json.JSONDecodeError:
-            return False
-
-    if username not in users:
-        return False
-
-    return users[username]["answer"].strip().lower() == answer.strip().lower()
-# Passwort zurücksetzen
-def reset_password(username, new_password):
-    if not os.path.exists(USER_DATA_FILE):
-        return False
-
-    with open(USER_DATA_FILE, "r") as f:
-        try:
-            users = json.load(f)
-        except json.JSONDecodeError:
-            return False
-
-    if username not in users:
-        return False
-
-    users[username]["password"] = hash_password(new_password)
-
-    with open(USER_DATA_FILE, "w") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-
-    return True
+# ✅ Sicherheitsantwort überprüfen
+def verify_security_answer(username: str, answer: str) -> bool:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT answer FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        return row[0] == answer if row else False
+    finally:
+        conn.close()
