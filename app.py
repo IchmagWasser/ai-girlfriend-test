@@ -76,7 +76,7 @@ def init_db():
         cursor.execute("""
             INSERT INTO users (username, password, question, answer, is_admin) 
             VALUES (?, ?, ?, ?, 1)
-        """, ("admin", admin_hash, "Default Admin Question", "admin", 1))
+        """, ("admin", admin_hash, "Default Admin Question", "admin"))
         logger.info("[INIT] Admin-User erstellt (admin/admin)")
     
     conn.commit()
