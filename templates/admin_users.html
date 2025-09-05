@@ -618,3 +618,46 @@
                 form.addEventListener('submit', function(e) {
                     const button = this.querySelector('button[type="submit"]');
                     if (button && !button.onclick) { // Skip if it has onclick (confirmation)
+                        const originalText = button.innerHTML;
+                        button.disabled = true;
+                        button.innerHTML = '⏳ Verarbeite...';
+                        
+                        // Re-enable after timeout in case of error
+                        setTimeout(() => {
+                            button.disabled = false;
+                            button.innerHTML = originalText;
+                        }, 5000);
+                    }
+                });
+            });
+
+            // Enhanced user interactions
+            const userRows = document.querySelectorAll('.users-table tbody tr');
+            userRows.forEach(row => {
+                row.addEventListener('mouseenter', function() {
+                    this.style.transform = 'scale(1.01)';
+                    this.style.boxShadow = '0 5px 15px rgba(0,0,0,0.1)';
+                });
+                
+                row.addEventListener('mouseleave', function() {
+                    this.style.transform = 'scale(1)';
+                    this.style.boxShadow = 'none';
+                });
+            });
+
+            // Animate stat cards on load
+            const statCards = document.querySelectorAll('.stat-card');
+            statCards.forEach((card, index) => {
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(30px)';
+                
+                setTimeout(() => {
+                    card.style.transition = 'all 0.5s ease';
+                    card.style.opacity = '1';
+                    card.style.transform = 'translateY(0)';
+                }, index * 150);
+            });
+        });
+    </script>
+</body>
+</html>
