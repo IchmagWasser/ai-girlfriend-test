@@ -138,7 +138,7 @@
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            margin-bottom: 1.5rem;
+            margin-bottom: 2rem;
             box-shadow: 0 5px 20px rgba(255, 107, 107, 0.3);
         }
 
@@ -180,32 +180,62 @@
             backdrop-filter: blur(10px);
         }
 
-        .links-section {
-            text-align: center;
-            margin-top: 1.5rem;
-        }
-
-        .auth-link {
-            color: rgba(255, 255, 255, 0.9);
-            text-decoration: none;
-            font-weight: 500;
-            transition: all 0.3s ease;
-            padding: 0.5rem 1rem;
-            border-radius: 10px;
-            display: inline-block;
-            margin: 0.25rem;
-        }
-
-        .auth-link:hover {
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            transform: translateY(-1px);
-        }
-
         .divider {
             height: 1px;
             background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-            margin: 2rem 0 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .register-btn {
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, #2ed573 0%, #17a085 100%);
+            border: none;
+            border-radius: 15px;
+            color: white;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            text-align: center;
+            display: block;
+            box-shadow: 0 5px 20px rgba(46, 213, 115, 0.3);
+        }
+
+        .register-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(46, 213, 115, 0.4);
+        }
+
+        .reset-btn {
+            width: 100%;
+            padding: 0.75rem;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 15px;
+            color: white;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            text-align: center;
+            display: block;
+            backdrop-filter: blur(10px);
+        }
+
+        .reset-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: translateY(-2px);
         }
 
         .admin-info {
@@ -220,6 +250,13 @@
 
         .admin-info strong {
             color: #ffd700;
+        }
+
+        .admin-info code {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 0.2rem 0.5rem;
+            border-radius: 5px;
+            font-family: monospace;
         }
 
         /* Responsive */
@@ -237,6 +274,10 @@
             
             .logo-text {
                 font-size: 1.5rem;
+            }
+
+            .action-buttons {
+                gap: 0.75rem;
             }
         }
     </style>
@@ -287,10 +328,14 @@
 
         <div class="divider"></div>
 
-        <div class="links-section">
-            <a href="/register" class="auth-link">Neuen Account erstellen</a>
-            <br>
-            <a href="/reset" class="auth-link">Passwort vergessen?</a>
+        <div class="action-buttons">
+            <a href="/register" class="register-btn">
+                📝 Neuen Account erstellen
+            </a>
+            
+            <a href="/reset" class="reset-btn">
+                🔐 Passwort vergessen?
+            </a>
         </div>
 
         <div class="admin-info">
@@ -319,6 +364,18 @@
             if (inputs.length > 0) {
                 inputs[0].focus();
             }
+
+            // Button hover effects
+            const buttons = document.querySelectorAll('.register-btn, .reset-btn');
+            buttons.forEach(button => {
+                button.addEventListener('mouseenter', function() {
+                    this.style.transform = 'translateY(-3px) scale(1.02)';
+                });
+                
+                button.addEventListener('mouseleave', function() {
+                    this.style.transform = 'translateY(0) scale(1)';
+                });
+            });
         });
     </script>
 </body>
