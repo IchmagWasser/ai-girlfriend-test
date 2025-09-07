@@ -13,9 +13,11 @@ import io
 import tempfile
 import html
 import hmac
+import json
 from datetime import datetime
+from time import time
 
-from ollama_chat import get_response
+from ollama_chat import get_response, get_response_with_messages
 
 # ──────────────────────────────
 # Setup
@@ -34,6 +36,44 @@ logger = logging.getLogger("app")
 
 DB_PATH = "users.db"
 CHAT_TABLE_CREATED = False
+RATE_LIMIT_FILE = "rate_limits.json"
+MESSAGES_PER_HOUR = 50
+SESSION_TIMEOUT_MINUTES = 30
+SESSION_TIMEOUT_SECONDS = SESSION_TIMEOUT_MINUTES * 60
+
+# Persona-Definitionen
+PERSONAS = {
+    "standard": {
+        "name": "Standard Assistent",
+        "emoji": "🤖",
+        "system_prompt": "Du bist ein hilfsfreundlicher KI-Assistent. Antworte auf Deutsch und sei sachlich aber freundlich."
+    },
+    "freundlich": {
+        "name": "Freundlicher Helfer", 
+        "emoji": "😊",
+        "system_prompt": "Du bist ein sehr freundlicher und enthusiastischer Assistent. Verwende warme, ermutigende Worte und zeige echtes Interesse an den Fragen. Sei optimistisch und unterstützend."
+    },
+    "lustig": {
+        "name": "Comedy Bot",
+        "emoji": "😄", 
+        "system_prompt": "Du bist ein humorvoller Assistent der gerne Witze macht und lustige Antworten gibt. Bleibe trotzdem hilfreich, aber bringe den User zum Lächeln. Verwende gelegentlich Wortwitz oder lustige Vergleiche."
+    },
+    "professionell": {
+        "name": "Business Experte",
+        "emoji": "👔",
+        "system_prompt": "Du bist ein professioneller Berater mit Expertise in Business und Technik. Antworte präzise, strukturiert und sachlich. Nutze Fachbegriffe angemessen und gib konkrete Handlungsempfehlungen."
+    },
+    "lehrerin": {
+        "name": "Geduldige Lehrerin", 
+        "emoji": "👩‍🏫",
+        "system_prompt": "Du bist eine geduldige Lehrerin die komplexe Themen einfach erklärt. Baue Erklärungen schrittweise auf, verwende Beispiele und frage nach ob alles verstanden wurde. Ermutige zum Lernen."
+    },
+    "kreativ": {
+        "name": "Kreativer Geist",
+        "emoji": "🎨", 
+        "system_prompt": "Du bist ein kreativer Assistent voller Ideen und Inspiration. Denke um die Ecke, schlage ungewöhnliche Lösungen vor und bringe künstlerische Perspektiven ein. Sei experimentierfreudig."
+    }
+}
 
 # ──────────────────────────────
 # Database Helper Functions
@@ -53,7 +93,8 @@ def init_db():
             question TEXT NOT NULL,
             answer TEXT NOT NULL,
             is_admin INTEGER DEFAULT 0,
-            is_blocked INTEGER DEFAULT 0
+            is_blocked INTEGER DEFAULT 0,
+            persona TEXT DEFAULT 'standard'
         )
     """)
     
@@ -103,7 +144,8 @@ def get_user(username: str) -> dict:
             "question": row[2],
             "answer": row[3],
             "is_admin": bool(row[4]),
-            "is_blocked": bool(row[5])
+            "is_blocked": bool(row[5]),
+            "persona": row[6] if len(row) > 6 else "standard"
         }
     return None
 
@@ -234,6 +276,131 @@ def delete_user_completely(username: str):
     conn.commit()
     conn.close()
 
+def get_user_persona(username: str) -> str:
+    """Holt die gewählte Persona des Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT persona FROM users WHERE username = ?", (username,))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else "standard"
+    except sqlite3.OperationalError:
+        # Spalte existiert noch nicht
+        return "standard"
+    finally:
+        conn.close()
+
+def save_user_persona(username: str, persona: str):
+    """Speichert die gewählte Persona des Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Prüfen ob users Tabelle persona Spalte hat, falls nicht hinzufügen
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+    
+    if 'persona' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN persona TEXT DEFAULT 'standard'")
+    
+    cursor.execute("UPDATE users SET persona = ? WHERE username = ?", (persona, username))
+    conn.commit()
+    conn.close()
+
+def get_response_with_context(current_message: str, chat_history: list, persona: str = "standard") -> str:
+    """
+    Holt KI-Antwort mit Chat-Kontext und Persona
+    """
+    # Chat-Historie in das richtige Format für Ollama konvertieren
+    messages = []
+    
+    # System-Prompt basierend auf gewählter Persona
+    persona_config = PERSONAS.get(persona, PERSONAS["standard"])
+    messages.append({
+        "role": "system", 
+        "content": persona_config["system_prompt"]
+    })
+    
+    # Chat-Historie hinzufügen (letzte 20 Nachrichten für besseren Kontext)
+    for msg in chat_history[-20:]:
+        if msg["role"] in ["user", "assistant"]:
+            messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+    
+    # Aktuelle Nachricht hinzufügen
+    messages.append({
+        "role": "user",
+        "content": current_message
+    })
+    
+    # An get_response weitergeben
+    return get_response_with_messages(messages)
+
+# Rate-Limiting Funktionen
+def load_rate_limits():
+    """Lädt Rate-Limit-Daten"""
+    if os.path.exists(RATE_LIMIT_FILE):
+        try:
+            with open(RATE_LIMIT_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_rate_limits(limits):
+    """Speichert Rate-Limit-Daten"""
+    with open(RATE_LIMIT_FILE, 'w') as f:
+        json.dump(limits, f)
+
+def check_rate_limit(username: str) -> bool:
+    """Prüft ob User Rate-Limit erreicht hat"""
+    limits = load_rate_limits()
+    current_time = time()
+    
+    user_data = limits.get(username, {"messages": [], "last_reset": current_time})
+    
+    # Alte Nachrichten entfernen (älter als 1 Stunde)
+    hour_ago = current_time - 3600
+    user_data["messages"] = [msg_time for msg_time in user_data["messages"] if msg_time > hour_ago]
+    
+    # Prüfen ob Limit erreicht
+    if len(user_data["messages"]) >= MESSAGES_PER_HOUR:
+        return False
+    
+    # Neue Nachricht hinzufügen
+    user_data["messages"].append(current_time)
+    limits[username] = user_data
+    save_rate_limits(limits)
+    
+    return True
+
+# Session-Management
+def update_session_activity(request: Request):
+    """Aktualisiert die letzte Aktivität in der Session"""
+    request.session["last_activity"] = time()
+
+def check_session_timeout(request: Request) -> bool:
+    """Prüft ob Session abgelaufen ist"""
+    last_activity = request.session.get("last_activity")
+    if not last_activity:
+        return True
+    
+    return (time() - last_activity) > SESSION_TIMEOUT_SECONDS
+
+def require_active_session(request: Request):
+    """Middleware-ähnliche Funktion für Session-Check"""
+    if not request.session.get("username"):
+        return RedirectResponse("/", status_code=302)
+    
+    if check_session_timeout(request):
+        request.session.clear()
+        return RedirectResponse("/?timeout=1", status_code=302)
+    
+    update_session_activity(request)
+    return None
+
 def is_admin(request: Request) -> bool:
     username = request.session.get("username")
     if username:
@@ -265,6 +432,7 @@ async def login(request: Request, username: str = Form(...), password: str = For
             })
         
         request.session["username"] = username
+        update_session_activity(request)
         
         if user["is_admin"]:
             return RedirectResponse("/admin", status_code=302)
@@ -329,38 +497,111 @@ async def logout(request: Request):
 # ──────────────────────────────
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
-    username = request.session.get("username")
-    if not username:
-        return RedirectResponse("/", status_code=302)
+    # Session-Check
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
     
-    # Chat-Historie laden für Template
+    username = request.session.get("username")
     history = get_user_history(username)
     
     return templates.TemplateResponse("chat.html", {
         "request": request, 
         "username": username,
-        "chat_history": history  # für Template falls benötigt
+        "chat_history": history,
+        "session_timeout_minutes": SESSION_TIMEOUT_MINUTES
     })
 
 @app.post("/chat")
-async def chat(req: Request):
+async def chat_with_context(req: Request):
+    # Session-Check
+    redirect = require_active_session(req)
+    if redirect:
+        return {"reply": "Session abgelaufen. Bitte neu anmelden.", "redirect": "/"}
+    
     username = req.session.get("username")
-    if not username:
-        return {"reply": "❌ Nicht eingeloggt."}
+    
+    # Rate-Limit prüfen
+    if not check_rate_limit(username):
+        return {"reply": f"⏰ Rate-Limit erreicht! Du kannst maximal {MESSAGES_PER_HOUR} Nachrichten pro Stunde senden."}
     
     data = await req.json()
     user_message = data.get("message", "")
     
+    if not user_message.strip():
+        return {"reply": "❌ Leere Nachricht."}
+    
     # User-Nachricht speichern
     save_user_history(username, "user", user_message)
     
-    # KI-Antwort holen
-    response_text = get_response(user_message)
+    # Chat-Historie für Kontext laden
+    history = get_user_history(username)
     
-    # KI-Antwort speichern
-    save_user_history(username, "assistant", response_text)
+    # User-Persona laden
+    user_persona = get_user_persona(username)
     
-    return {"reply": response_text}
+    try:
+        # KI-Antwort mit Kontext holen
+        response_text = get_response_with_context(user_message, history, user_persona)
+        
+        # KI-Antwort speichern
+        save_user_history(username, "assistant", response_text)
+        
+        return {"reply": response_text}
+        
+    except Exception as e:
+        logger.error(f"Chat error for {username}: {str(e)}")
+        return {"reply": "❌ Entschuldigung, ein Fehler ist aufgetreten. Versuche es erneut."}
+
+@app.post("/chat/clear-history")
+async def clear_user_history(request: Request):
+    """User kann seinen eigenen Chat-Verlauf löschen"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    # Chat-Verlauf für den User löschen
+    delete_user_history(username)
+    logger.info(f"[USER] {username} hat seinen Chat-Verlauf gelöscht")
+    
+    return RedirectResponse("/chat", status_code=302)
+
+# ──────────────────────────────
+# Routes - Persona
+# ──────────────────────────────
+@app.get("/persona", response_class=HTMLResponse)
+async def persona_settings(request: Request):
+    """Persona-Einstellungen Seite"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    current_persona = get_user_persona(username)
+    
+    return templates.TemplateResponse("persona.html", {
+        "request": request,
+        "username": username, 
+        "personas": PERSONAS,
+        "current_persona": current_persona
+    })
+
+@app.post("/persona")
+async def set_persona(request: Request, persona: str = Form(...)):
+    """Persona auswählen"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    if persona in PERSONAS:
+        save_user_persona(username, persona)
+        logger.info(f"[PERSONA] {username} wählte Persona: {persona}")
+    
+    return RedirectResponse("/chat", status_code=302)
 
 # ──────────────────────────────
 # Routes - Admin
@@ -370,6 +611,11 @@ async def admin_page(request: Request):
     guard = admin_redirect_guard(request)
     if guard:
         return guard
+    
+    # Session-Check auch für Admin
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
     
     users = get_all_users()
     return templates.TemplateResponse("admin_users.html", {
@@ -494,6 +740,25 @@ async def export_csv():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=users.csv"}
     )
+
+# ──────────────────────────────
+# API Routes
+# ──────────────────────────────
+@app.get("/api/session-info")
+async def session_info(request: Request):
+    """API für Session-Status"""
+    if not request.session.get("username"):
+        return {"active": False}
+    
+    last_activity = request.session.get("last_activity", time())
+    remaining_seconds = max(0, SESSION_TIMEOUT_SECONDS - (time() - last_activity))
+    
+    return {
+        "active": True,
+        "username": request.session.get("username"),
+        "remaining_minutes": int(remaining_seconds / 60),
+        "remaining_seconds": int(remaining_seconds)
+    }
 
 # ──────────────────────────────
 # Startup

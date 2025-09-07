@@ -548,6 +548,29 @@
             }
         });
 
+        // Clear chat history function
+        window.clearHistory = async function() {
+            if (confirm('Möchtest du wirklich deinen kompletten Chat-Verlauf löschen? Diese Aktion kann nicht rückgängig gemacht werden.')) {
+                try {
+                    const response = await fetch('/chat/clear-history', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        // Reload page to show empty chat
+                        window.location.reload();
+                    } else {
+                        alert('Fehler beim Löschen des Verlaufs');
+                    }
+                } catch (error) {
+                    alert('Verbindungsfehler: ' + error.message);
+                }
+            }
+        };
+
         // Initial focus and scroll
         input.focus();
         scrollToBottom();
