@@ -14,6 +14,7 @@ import tempfile
 import html
 import hmac
 import json
+import re
 from datetime import datetime
 from time import time
 
@@ -128,6 +129,65 @@ def init_db():
 def hash_password(password: str) -> str:
     """Passwort hashen"""
     return hashlib.sha256(password.encode()).hexdigest()
+
+def render_markdown_simple(text: str) -> str:
+    """
+    Einfaches Markdown-Rendering für Chat-Nachrichten
+    Unterstützt: Code-Blöcke, Inline-Code, Listen, Links, Fett/Kursiv
+    """
+    # HTML escaping für Sicherheit
+    text = html.escape(text)
+    
+    # Code-Blöcke (```code```)
+    text = re.sub(
+        r'```(\w+)?\n?(.*?)```', 
+        r'<div class="code-block"><div class="code-header">\1</div><pre><code>\2</code></pre></div>', 
+        text, 
+        flags=re.DOTALL
+    )
+    
+    # Inline-Code (`code`)
+    text = re.sub(r'`([^`]+)`', r'<code class="inline-code">\1</code>', text)
+    
+    # Fett (**text**)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
+    
+    # Kursiv (*text*)
+    text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
+    
+    # Listen (- item)
+    lines = text.split('\n')
+    in_list = False
+    result_lines = []
+    
+    for line in lines:
+        if line.strip().startswith('- '):
+            if not in_list:
+                result_lines.append('<ul class="chat-list">')
+                in_list = True
+            result_lines.append(f'<li>{line.strip()[2:]}</li>')
+        else:
+            if in_list:
+                result_lines.append('</ul>')
+                in_list = False
+            result_lines.append(line)
+    
+    if in_list:
+        result_lines.append('</ul>')
+    
+    text = '\n'.join(result_lines)
+    
+    # Links [text](url)
+    text = re.sub(
+        r'\[([^\]]+)\]\(([^)]+)\)', 
+        r'<a href="\2" target="_blank" class="chat-link">\1</a>', 
+        text
+    )
+    
+    # Zeilenumbrüche
+    text = text.replace('\n', '<br>')
+    
+    return text
 
 def get_user(username: str) -> dict:
     """User aus DB holen"""
@@ -513,7 +573,7 @@ async def chat_page(request: Request):
     })
 
 @app.post("/chat")
-async def chat_with_context(req: Request):
+async def chat_with_markdown(req: Request):
     # Session-Check
     redirect = require_active_session(req)
     if redirect:
@@ -523,13 +583,13 @@ async def chat_with_context(req: Request):
     
     # Rate-Limit prüfen
     if not check_rate_limit(username):
-        return {"reply": f"⏰ Rate-Limit erreicht! Du kannst maximal {MESSAGES_PER_HOUR} Nachrichten pro Stunde senden."}
+        return {"reply": f"Rate-Limit erreicht! Maximal {MESSAGES_PER_HOUR} Nachrichten pro Stunde."}
     
     data = await req.json()
     user_message = data.get("message", "")
     
     if not user_message.strip():
-        return {"reply": "❌ Leere Nachricht."}
+        return {"reply": "Leere Nachricht."}
     
     # User-Nachricht speichern
     save_user_history(username, "user", user_message)
@@ -541,17 +601,23 @@ async def chat_with_context(req: Request):
     user_persona = get_user_persona(username)
     
     try:
-        # KI-Antwort mit Kontext holen
-        response_text = get_response_with_context(user_message, history, user_persona)
+        # Raw-Antwort von KI holen
+        raw_response = get_response_with_context(user_message, history, user_persona)
         
-        # KI-Antwort speichern
-        save_user_history(username, "assistant", response_text)
+        # Markdown rendern
+        rendered_response = render_markdown_simple(raw_response)
         
-        return {"reply": response_text}
+        # Raw-Version in DB speichern (für Verlauf)
+        save_user_history(username, "assistant", raw_response)
+        
+        return {
+            "reply": rendered_response,
+            "raw_reply": raw_response  # für TTS
+        }
         
     except Exception as e:
         logger.error(f"Chat error for {username}: {str(e)}")
-        return {"reply": "❌ Entschuldigung, ein Fehler ist aufgetreten. Versuche es erneut."}
+        return {"reply": "Ein Fehler ist aufgetreten. Versuche es erneut."}
 
 @app.post("/chat/clear-history")
 async def clear_user_history(request: Request):
