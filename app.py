@@ -1,9 +1,11 @@
-from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi import FastAPI, Request, Form, HTTPException, Header
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
+from typing import Optional
+from enum import Enum
 import os
 import logging
 import sqlite3
@@ -15,13 +17,15 @@ import html
 import hmac
 import json
 import re
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 from time import time
+from collections import defaultdict
 
 from ollama_chat import get_response, get_response_with_messages
 
 # ──────────────────────────────
-# Setup
+# Setup & Configuration
 # ──────────────────────────────
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
@@ -35,12 +39,27 @@ templates = Jinja2Templates(directory="templates")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
+# File paths
 DB_PATH = "users.db"
-CHAT_TABLE_CREATED = False
 RATE_LIMIT_FILE = "rate_limits.json"
+ANALYTICS_FILE = "analytics.json"
+
+# Settings
+CHAT_TABLE_CREATED = False
 MESSAGES_PER_HOUR = 50
 SESSION_TIMEOUT_MINUTES = 30
 SESSION_TIMEOUT_SECONDS = SESSION_TIMEOUT_MINUTES * 60
+
+# API Key Management
+API_KEYS = {}  # In production: Redis oder separate Datenbank nutzen
+
+# ──────────────────────────────
+# Subscription System
+# ──────────────────────────────
+class SubscriptionTier(Enum):
+    FREE = "free"
+    PREMIUM = "premium"
+    ENTERPRISE = "enterprise"
 
 # Persona-Definitionen
 PERSONAS = {
@@ -76,6 +95,30 @@ PERSONAS = {
     }
 }
 
+SUBSCRIPTION_LIMITS = {
+    SubscriptionTier.FREE: {
+        "messages_per_day": 50,
+        "api_calls_per_day": 100,
+        "personas": ["standard", "freundlich", "lustig"],
+        "features": ["basic_chat", "history"],
+        "max_context_length": 5  # Anzahl vorheriger Nachrichten
+    },
+    SubscriptionTier.PREMIUM: {
+        "messages_per_day": 500,
+        "api_calls_per_day": 1000,
+        "personas": list(PERSONAS.keys()),  # Alle Personas
+        "features": ["basic_chat", "history", "tts", "export", "advanced_personas", "markdown"],
+        "max_context_length": 20
+    },
+    SubscriptionTier.ENTERPRISE: {
+        "messages_per_day": -1,  # Unlimited
+        "api_calls_per_day": -1,
+        "personas": list(PERSONAS.keys()),
+        "features": ["all"],
+        "max_context_length": 50
+    }
+}
+
 # ──────────────────────────────
 # Database Helper Functions
 # ──────────────────────────────
@@ -86,7 +129,7 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Users-Tabelle (konsistent mit deinem reset.py)
+    # Users-Tabelle (erweitert mit subscription)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -95,7 +138,8 @@ def init_db():
             answer TEXT NOT NULL,
             is_admin INTEGER DEFAULT 0,
             is_blocked INTEGER DEFAULT 0,
-            persona TEXT DEFAULT 'standard'
+            persona TEXT DEFAULT 'standard',
+            subscription TEXT DEFAULT 'free'
         )
     """)
     
@@ -116,8 +160,8 @@ def init_db():
     if not cursor.fetchone():
         admin_hash = hash_password("admin")
         cursor.execute("""
-            INSERT INTO users (username, password, question, answer, is_admin) 
-            VALUES (?, ?, ?, ?, 1)
+            INSERT INTO users (username, password, question, answer, is_admin, subscription) 
+            VALUES (?, ?, ?, ?, 1, 'enterprise')
         """, ("admin", admin_hash, "Default Admin Question", "admin"))
         logger.info("[INIT] Admin-User erstellt (admin/admin)")
     
@@ -205,7 +249,8 @@ def get_user(username: str) -> dict:
             "answer": row[3],
             "is_admin": bool(row[4]),
             "is_blocked": bool(row[5]),
-            "persona": row[6] if len(row) > 6 else "standard"
+            "persona": row[6] if len(row) > 6 else "standard",
+            "subscription": row[7] if len(row) > 7 else "free"
         }
     return None
 
@@ -224,7 +269,8 @@ def get_all_users() -> dict:
             "question": row[2],
             "answer": row[3],
             "is_admin": bool(row[4]),
-            "blocked": bool(row[5])  # für Template-Kompatibilität
+            "blocked": bool(row[5]),  # für Template-Kompatibilität
+            "subscription": row[7] if len(row) > 7 else "free"
         }
     return users
 
@@ -398,7 +444,173 @@ def get_response_with_context(current_message: str, chat_history: list, persona:
     # An get_response weitergeben
     return get_response_with_messages(messages)
 
-# Rate-Limiting Funktionen
+# ──────────────────────────────
+# Subscription Management
+# ──────────────────────────────
+def get_user_subscription(username: str) -> SubscriptionTier:
+    """Holt Subscription-Status eines Users"""
+    user = get_user(username)
+    if user:
+        subscription = user.get("subscription", "free")
+        try:
+            return SubscriptionTier(subscription)
+        except ValueError:
+            return SubscriptionTier.FREE
+    return SubscriptionTier.FREE
+
+def set_user_subscription(username: str, tier: SubscriptionTier):
+    """Setzt Subscription-Tier für User"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Prüfen ob subscription Spalte existiert
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+    
+    if 'subscription' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN subscription TEXT DEFAULT 'free'")
+    
+    cursor.execute("UPDATE users SET subscription = ? WHERE username = ?", (tier.value, username))
+    conn.commit()
+    conn.close()
+
+def check_feature_access(username: str, feature: str) -> bool:
+    """Prüft ob User Zugriff auf Feature hat"""
+    tier = get_user_subscription(username)
+    allowed_features = SUBSCRIPTION_LIMITS[tier]["features"]
+    
+    return "all" in allowed_features or feature in allowed_features
+
+def check_daily_limit(username: str, limit_type: str) -> bool:
+    """Prüft tägliche Limits (Nachrichten, API-Calls)"""
+    tier = get_user_subscription(username)
+    limit = SUBSCRIPTION_LIMITS[tier].get(f"{limit_type}_per_day", 0)
+    
+    if limit == -1:  # Unlimited
+        return True
+    
+    # Aktuelle Nutzung prüfen
+    analytics = load_analytics()
+    today = datetime.now().strftime("%Y-%m-%d")
+    user_data = analytics["users"].get(username, {})
+    
+    current_usage = user_data.get(f"{limit_type}_today", 0)
+    return current_usage < limit
+
+def get_available_personas(username: str) -> dict:
+    """Gibt verfügbare Personas basierend auf Subscription zurück"""
+    tier = get_user_subscription(username)
+    allowed_personas = SUBSCRIPTION_LIMITS[tier]["personas"]
+    
+    return {key: value for key, value in PERSONAS.items() if key in allowed_personas}
+
+# ──────────────────────────────
+# Analytics System
+# ──────────────────────────────
+def load_analytics():
+    """Lädt Analytics-Daten"""
+    if os.path.exists(ANALYTICS_FILE):
+        try:
+            with open(ANALYTICS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {"daily": {}, "users": {}, "features": {}, "api": {}}
+    return {"daily": {}, "users": {}, "features": {}, "api": {}}
+
+def save_analytics(data):
+    """Speichert Analytics-Daten"""
+    with open(ANALYTICS_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+def track_user_action(username: str, action: str, details: dict = None):
+    """Trackt User-Aktionen für Analytics"""
+    analytics = load_analytics()
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Tägliche Statistiken
+    if today not in analytics["daily"]:
+        analytics["daily"][today] = {
+            "total_messages": 0,
+            "unique_users": set(),
+            "personas_used": defaultdict(int),
+            "features_used": defaultdict(int)
+        }
+    
+    # User-spezifische Statistiken
+    if username not in analytics["users"]:
+        analytics["users"][username] = {
+            "first_seen": today,
+            "last_seen": today,
+            "total_messages": 0,
+            "messages_today": 0,
+            "api_calls_today": 0,
+            "favorite_persona": "standard",
+            "features_used": []
+        }
+    
+    # Tägliche Counter zurücksetzen wenn neuer Tag
+    if analytics["users"][username].get("last_reset") != today:
+        analytics["users"][username]["messages_today"] = 0
+        analytics["users"][username]["api_calls_today"] = 0
+        analytics["users"][username]["last_reset"] = today
+    
+    # Daten aktualisieren
+    if action == "chat_message":
+        analytics["daily"][today]["total_messages"] += 1
+        analytics["daily"][today]["unique_users"].add(username)
+        analytics["users"][username]["total_messages"] += 1
+        analytics["users"][username]["messages_today"] += 1
+        analytics["users"][username]["last_seen"] = today
+        
+        if details and "persona" in details:
+            analytics["daily"][today]["personas_used"][details["persona"]] += 1
+    
+    elif action == "api_call":
+        analytics["users"][username]["api_calls_today"] += 1
+        if details and "persona" in details:
+            analytics["daily"][today]["personas_used"][details["persona"]] += 1
+    
+    elif action == "feature_used":
+        feature = details.get("feature", "unknown")
+        analytics["daily"][today]["features_used"][feature] += 1
+        if feature not in analytics["users"][username]["features_used"]:
+            analytics["users"][username]["features_used"].append(feature)
+    
+    # Sets zu Listen konvertieren für JSON-Serialisierung
+    if isinstance(analytics["daily"][today]["unique_users"], set):
+        analytics["daily"][today]["unique_users"] = list(analytics["daily"][today]["unique_users"])
+    analytics["daily"][today]["personas_used"] = dict(analytics["daily"][today]["personas_used"])
+    analytics["daily"][today]["features_used"] = dict(analytics["daily"][today]["features_used"])
+    
+    save_analytics(analytics)
+
+# ──────────────────────────────
+# API Key Management
+# ──────────────────────────────
+def generate_api_key(username: str) -> str:
+    """Generiert einen neuen API-Key für einen User"""
+    api_key = f"ki-chat-{uuid.uuid4().hex[:16]}"
+    API_KEYS[api_key] = {
+        "username": username,
+        "created_at": time(),
+        "requests_today": 0,
+        "total_requests": 0
+    }
+    return api_key
+
+def validate_api_key(api_key: str) -> Optional[dict]:
+    """Validiert API-Key und gibt User-Info zurück"""
+    return API_KEYS.get(api_key)
+
+def track_api_usage(api_key: str):
+    """Trackt API-Nutzung für Analytics"""
+    if api_key in API_KEYS:
+        API_KEYS[api_key]["requests_today"] += 1
+        API_KEYS[api_key]["total_requests"] += 1
+
+# ──────────────────────────────
+# Rate Limiting & Session Management
+# ──────────────────────────────
 def load_rate_limits():
     """Lädt Rate-Limit-Daten"""
     if os.path.exists(RATE_LIMIT_FILE):
@@ -436,7 +648,6 @@ def check_rate_limit(username: str) -> bool:
     
     return True
 
-# Session-Management
 def update_session_activity(request: Request):
     """Aktualisiert die letzte Aktivität in der Session"""
     request.session["last_activity"] = time()
@@ -553,7 +764,7 @@ async def logout(request: Request):
     return RedirectResponse("/", status_code=302)
 
 # ──────────────────────────────
-# Routes - Chat
+# Routes - Chat (with Subscription Limits)
 # ──────────────────────────────
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
@@ -564,24 +775,34 @@ async def chat_page(request: Request):
     
     username = request.session.get("username")
     history = get_user_history(username)
+    tier = get_user_subscription(username)
     
     return templates.TemplateResponse("chat.html", {
         "request": request, 
         "username": username,
         "chat_history": history,
-        "session_timeout_minutes": SESSION_TIMEOUT_MINUTES
+        "session_timeout_minutes": SESSION_TIMEOUT_MINUTES,
+        "subscription_tier": tier.value
     })
 
 @app.post("/chat")
-async def chat_with_markdown(req: Request):
-    # Session-Check
+async def chat_with_subscription_limits(req: Request):
     redirect = require_active_session(req)
     if redirect:
         return {"reply": "Session abgelaufen. Bitte neu anmelden.", "redirect": "/"}
     
     username = req.session.get("username")
     
-    # Rate-Limit prüfen
+    # Subscription-Limits prüfen
+    if not check_daily_limit(username, "messages"):
+        tier = get_user_subscription(username)
+        limit = SUBSCRIPTION_LIMITS[tier]["messages_per_day"]
+        return {
+            "reply": f"Tägliches Limit erreicht ({limit} Nachrichten). Upgrade auf Premium für mehr!",
+            "upgrade_needed": True,
+            "current_tier": tier.value
+        }
+    
     if not check_rate_limit(username):
         return {"reply": f"Rate-Limit erreicht! Maximal {MESSAGES_PER_HOUR} Nachrichten pro Stunde."}
     
@@ -594,25 +815,39 @@ async def chat_with_markdown(req: Request):
     # User-Nachricht speichern
     save_user_history(username, "user", user_message)
     
-    # Chat-Historie für Kontext laden
+    # Chat-Historie mit Subscription-basierter Länge
     history = get_user_history(username)
+    tier = get_user_subscription(username)
+    max_context = SUBSCRIPTION_LIMITS[tier]["max_context_length"]
+    limited_history = history[-max_context*2:] if max_context > 0 else history
     
-    # User-Persona laden
     user_persona = get_user_persona(username)
+    
+    # Prüfen ob Persona verfügbar ist
+    available_personas = get_available_personas(username)
+    if user_persona not in available_personas:
+        user_persona = "standard"  # Fallback
     
     try:
         # Raw-Antwort von KI holen
-        raw_response = get_response_with_context(user_message, history, user_persona)
+        raw_response = get_response_with_context(user_message, limited_history, user_persona)
         
-        # Markdown rendern
-        rendered_response = render_markdown_simple(raw_response)
+        # Markdown rendern (nur für Premium+)
+        if check_feature_access(username, "markdown"):
+            rendered_response = render_markdown_simple(raw_response)
+        else:
+            rendered_response = raw_response
         
-        # Raw-Version in DB speichern (für Verlauf)
+        # Raw-Version in DB speichern
         save_user_history(username, "assistant", raw_response)
+        
+        # Analytics tracken
+        track_user_action(username, "chat_message", {"persona": user_persona})
         
         return {
             "reply": rendered_response,
-            "raw_reply": raw_response  # für TTS
+            "raw_reply": raw_response if check_feature_access(username, "tts") else None,
+            "subscription_tier": tier.value
         }
         
     except Exception as e:
@@ -620,57 +855,286 @@ async def chat_with_markdown(req: Request):
         return {"reply": "Ein Fehler ist aufgetreten. Versuche es erneut."}
 
 @app.post("/chat/clear-history")
-async def clear_user_history(request: Request):
-    """User kann seinen eigenen Chat-Verlauf löschen"""
+async def clear_user_history_with_tracking(request: Request):
+    """User kann seinen eigenen Chat-Verlauf löschen (mit Analytics)"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
     username = request.session.get("username")
     
-    # Chat-Verlauf für den User löschen
+    # Chat-Verlauf löschen
     delete_user_history(username)
+    
+    # Analytics tracken
+    track_user_action(username, "feature_used", {"feature": "clear_history"})
+    
     logger.info(f"[USER] {username} hat seinen Chat-Verlauf gelöscht")
     
     return RedirectResponse("/chat", status_code=302)
 
 # ──────────────────────────────
-# Routes - Persona
+# Routes - Persona (with Subscription)
 # ──────────────────────────────
 @app.get("/persona", response_class=HTMLResponse)
-async def persona_settings(request: Request):
-    """Persona-Einstellungen Seite"""
+async def persona_settings_with_subscription(request: Request):
+    """Persona-Einstellungen mit Subscription-Filterung"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
     username = request.session.get("username")
     current_persona = get_user_persona(username)
+    available_personas = get_available_personas(username)
+    tier = get_user_subscription(username)
     
     return templates.TemplateResponse("persona.html", {
         "request": request,
         "username": username, 
-        "personas": PERSONAS,
-        "current_persona": current_persona
+        "personas": available_personas,
+        "all_personas": PERSONAS,  # Für "Upgrade needed" Anzeige
+        "current_persona": current_persona,
+        "subscription_tier": tier.value
     })
 
 @app.post("/persona")
-async def set_persona(request: Request, persona: str = Form(...)):
-    """Persona auswählen"""
+async def set_persona_with_tracking(request: Request, persona: str = Form(...)):
+    """Persona auswählen mit Analytics"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    available_personas = get_available_personas(username)
+    
+    if persona in available_personas:
+        save_user_persona(username, persona)
+        
+        # Analytics tracken
+        track_user_action(username, "feature_used", {"feature": "persona_change", "persona": persona})
+        
+        logger.info(f"[PERSONA] {username} wählte Persona: {persona}")
+    
+    return RedirectResponse("/chat", status_code=302)
+
+# ──────────────────────────────
+# Routes - Subscription Management
+# ──────────────────────────────
+@app.get("/subscription", response_class=HTMLResponse)
+async def subscription_page(request: Request):
+    """Subscription-Verwaltungsseite"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    current_tier = get_user_subscription(username)
+    
+    # Usage-Statistiken
+    analytics = load_analytics()
+    user_data = analytics["users"].get(username, {})
+    
+    return templates.TemplateResponse("subscription.html", {
+        "request": request,
+        "username": username,
+        "current_tier": current_tier.value,
+        "limits": SUBSCRIPTION_LIMITS[current_tier],
+        "usage": {
+            "messages_today": user_data.get("messages_today", 0),
+            "total_messages": user_data.get("total_messages", 0),
+            "api_calls_today": user_data.get("api_calls_today", 0)
+        },
+        "tiers": {
+            "free": SUBSCRIPTION_LIMITS[SubscriptionTier.FREE],
+            "premium": SUBSCRIPTION_LIMITS[SubscriptionTier.PREMIUM], 
+            "enterprise": SUBSCRIPTION_LIMITS[SubscriptionTier.ENTERPRISE]
+        }
+    })
+
+@app.post("/subscription/upgrade")
+async def upgrade_subscription(request: Request, tier: str = Form(...)):
+    """Subscription upgraden (Demo - in Production: Stripe Integration)"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
     username = request.session.get("username")
     
-    if persona in PERSONAS:
-        save_user_persona(username, persona)
-        logger.info(f"[PERSONA] {username} wählte Persona: {persona}")
+    # Validierung
+    try:
+        new_tier = SubscriptionTier(tier)
+    except ValueError:
+        return RedirectResponse("/subscription?error=invalid_tier", status_code=302)
     
-    return RedirectResponse("/chat", status_code=302)
+    # In Production: Hier würde Stripe Payment Processing stehen
+    # Für Demo: Direktes Upgrade
+    set_user_subscription(username, new_tier)
+    
+    # Analytics tracken
+    track_user_action(username, "feature_used", {"feature": "subscription_upgrade", "tier": tier})
+    
+    logger.info(f"[SUBSCRIPTION] {username} upgraded to {tier}")
+    
+    return RedirectResponse("/subscription?success=upgraded", status_code=302)
 
 # ──────────────────────────────
-# Routes - Admin
+# Routes - API Management
+# ──────────────────────────────
+@app.post("/api/generate-key")
+async def generate_api_key_route(request: Request):
+    """Generiert API-Key für angemeldeten User"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Not authenticated", "status_code": 401}
+    
+    username = request.session.get("username")
+    api_key = generate_api_key(username)
+    
+    logger.info(f"[API] API-Key generiert für {username}")
+    
+    return {
+        "api_key": api_key,
+        "usage": "Füge 'X-API-Key: {api_key}' zu deinen Request-Headers hinzu",
+        "endpoints": {
+            "chat": "/api/v1/chat",
+            "models": "/api/v1/models",
+            "usage": "/api/v1/usage"
+        }
+    }
+
+@app.get("/api/v1/models")
+async def list_models(x_api_key: Optional[str] = Header(None)):
+    """Listet verfügbare KI-Modelle"""
+    if not x_api_key or not validate_api_key(x_api_key):
+        return {"error": "Invalid API key", "status_code": 401}
+    
+    track_api_usage(x_api_key)
+    
+    return {
+        "models": [
+            {
+                "id": "llama3.2",
+                "name": "Llama 3.2",
+                "description": "Schnelles lokales Modell",
+                "max_tokens": 4096
+            },
+            {
+                "id": "gpt-3.5-turbo", 
+                "name": "GPT-3.5 Turbo",
+                "description": "OpenAI Modell (API-Key erforderlich)",
+                "max_tokens": 4096
+            }
+        ]
+    }
+
+@app.post("/api/v1/chat")
+async def api_chat_with_limits(
+    request: Request,
+    x_api_key: Optional[str] = Header(None)
+):
+    """API-Endpunkt mit Subscription-Limits"""
+    if not x_api_key:
+        return {"error": "API key required", "status_code": 401}
+    
+    user_info = validate_api_key(x_api_key)
+    if not user_info:
+        return {"error": "Invalid API key", "status_code": 401}
+    
+    username = user_info["username"]
+    
+    # Subscription-Limits für API prüfen
+    if not check_daily_limit(username, "api_calls"):
+        tier = get_user_subscription(username)
+        limit = SUBSCRIPTION_LIMITS[tier]["api_calls_per_day"]
+        return {
+            "error": f"Daily API limit exceeded ({limit} calls)",
+            "status_code": 429,
+            "upgrade_url": "/subscription"
+        }
+    
+    track_api_usage(x_api_key)
+    
+    # Request-Body parsen
+    data = await request.json()
+    message = data.get("message", "")
+    persona = data.get("persona", "standard")
+    model = data.get("model", "llama3.2")
+    include_context = data.get("include_context", True)
+    
+    if not message.strip():
+        return {"error": "Message cannot be empty", "status_code": 400}
+    
+    # Persona-Zugriff prüfen
+    available_personas = get_available_personas(username)
+    if persona not in available_personas:
+        return {
+            "error": f"Persona '{persona}' not available in your subscription",
+            "available_personas": list(available_personas.keys()),
+            "status_code": 403
+        }
+    
+    try:
+        if include_context:
+            # Mit Kontext (nutzt User-Historie)
+            history = get_user_history(username)
+            tier = get_user_subscription(username)
+            max_context = SUBSCRIPTION_LIMITS[tier]["max_context_length"]
+            limited_history = history[-max_context*2:] if max_context > 0 else history
+            
+            response_text = get_response_with_context(message, limited_history, persona)
+            
+            # Nachricht in User-Historie speichern
+            save_user_history(username, "user", message)
+            save_user_history(username, "assistant", response_text)
+        else:
+            # Ohne Kontext (einmalige Anfrage)
+            messages = [
+                {"role": "system", "content": PERSONAS.get(persona, PERSONAS["standard"])["system_prompt"]},
+                {"role": "user", "content": message}
+            ]
+            response_text = get_response_with_messages(messages)
+        
+        # Analytics tracken
+        track_user_action(username, "api_call", {"persona": persona})
+        
+        return {
+            "message": response_text,
+            "model": model,
+            "persona": persona,
+            "tokens_used": len(response_text.split()),
+            "subscription_tier": get_user_subscription(username).value,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"[API] Error for {username}: {str(e)}")
+        return {"error": "Internal server error", "status_code": 500}
+
+@app.get("/api/v1/usage")
+async def api_usage_stats(x_api_key: Optional[str] = Header(None)):
+    """API-Nutzungsstatistiken"""
+    if not x_api_key or not validate_api_key(x_api_key):
+        return {"error": "Invalid API key", "status_code": 401}
+    
+    user_info = API_KEYS[x_api_key]
+    username = user_info["username"]
+    tier = get_user_subscription(username)
+    
+    return {
+        "username": username,
+        "api_key": x_api_key[:8] + "...",  # Nur erste 8 Zeichen zeigen
+        "requests_today": user_info["requests_today"],
+        "total_requests": user_info["total_requests"],
+        "subscription_tier": tier.value,
+        "created_at": datetime.fromtimestamp(user_info["created_at"]).isoformat(),
+        "rate_limit": {
+            "requests_per_hour": MESSAGES_PER_HOUR,
+            "requests_per_day": SUBSCRIPTION_LIMITS[tier]["api_calls_per_day"]
+        }
+    }
+
+# ──────────────────────────────
+# Routes - Admin Panel (Extended)
 # ──────────────────────────────
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
@@ -684,9 +1148,82 @@ async def admin_page(request: Request):
         return redirect
     
     users = get_all_users()
+    
+    # Zusätzliche Admin-Statistiken
+    total_users = len(users)
+    blocked_users = sum(1 for user in users.values() if user.get("blocked", False))
+    premium_users = sum(1 for user in users.values() if user.get("subscription", "free") != "free")
+    
     return templates.TemplateResponse("admin_users.html", {
         "request": request, 
-        "users": users
+        "users": users,
+        "stats": {
+            "total_users": total_users,
+            "blocked_users": blocked_users,
+            "premium_users": premium_users,
+            "free_users": total_users - premium_users
+        }
+    })
+
+@app.post("/admin/set-subscription")
+async def admin_set_subscription(request: Request, 
+                                username: str = Form(...), 
+                                subscription: str = Form(...)):
+    """Admin kann Subscription setzen"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    try:
+        tier = SubscriptionTier(subscription)
+        set_user_subscription(username, tier)
+        logger.info(f"[ADMIN] Subscription für {username} auf {subscription} gesetzt")
+    except ValueError:
+        logger.error(f"[ADMIN] Ungültige Subscription: {subscription}")
+    
+    return RedirectResponse("/admin", status_code=302)
+
+@app.get("/admin/analytics", response_class=HTMLResponse)
+async def analytics_dashboard(request: Request):
+    """Analytics Dashboard für Admins"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    analytics = load_analytics()
+    
+    # Letzte 7 Tage berechnen
+    last_7_days = []
+    for i in range(7):
+        date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        last_7_days.append(date)
+    
+    # Statistiken aufbereiten
+    daily_stats = []
+    for date in reversed(last_7_days):
+        day_data = analytics["daily"].get(date, {})
+        daily_stats.append({
+            "date": date,
+            "messages": day_data.get("total_messages", 0),
+            "users": len(day_data.get("unique_users", [])),
+            "top_persona": max(day_data.get("personas_used", {"standard": 0}).items(), 
+                              key=lambda x: x[1], default=("standard", 0))[0]
+        })
+    
+    # Top-User
+    top_users = sorted(
+        [(username, data["total_messages"]) for username, data in analytics["users"].items()],
+        key=lambda x: x[1], 
+        reverse=True
+    )[:10]
+    
+    return templates.TemplateResponse("analytics.html", {
+        "request": request,
+        "daily_stats": daily_stats,
+        "top_users": top_users,
+        "total_users": len(analytics["users"]),
+        "total_messages": sum(data["total_messages"] for data in analytics["users"].values()),
+        "personas_usage": analytics["daily"].get(datetime.now().strftime("%Y-%m-%d"), {}).get("personas_used", {})
     })
 
 @app.post("/admin/toggle-block")
@@ -788,7 +1325,7 @@ async def export_csv():
     users = get_all_users()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Benutzername", "Passwort-Hash", "Frage", "Antwort", "Admin", "Blockiert"])
+    writer.writerow(["Benutzername", "Passwort-Hash", "Frage", "Antwort", "Admin", "Blockiert", "Subscription"])
     
     for name, data in users.items():
         writer.writerow([
@@ -797,7 +1334,8 @@ async def export_csv():
             data.get("question", ""),
             data.get("answer", ""),
             "Ja" if data.get("is_admin") else "Nein",
-            "Ja" if data.get("blocked") else "Nein"
+            "Ja" if data.get("blocked") else "Nein",
+            data.get("subscription", "free")
         ])
     
     output.seek(0)
@@ -808,7 +1346,7 @@ async def export_csv():
     )
 
 # ──────────────────────────────
-# API Routes
+# API Routes - Session Info
 # ──────────────────────────────
 @app.get("/api/session-info")
 async def session_info(request: Request):
@@ -818,18 +1356,20 @@ async def session_info(request: Request):
     
     last_activity = request.session.get("last_activity", time())
     remaining_seconds = max(0, SESSION_TIMEOUT_SECONDS - (time() - last_activity))
+    username = request.session.get("username")
     
     return {
         "active": True,
-        "username": request.session.get("username"),
+        "username": username,
         "remaining_minutes": int(remaining_seconds / 60),
-        "remaining_seconds": int(remaining_seconds)
+        "remaining_seconds": int(remaining_seconds),
+        "subscription_tier": get_user_subscription(username).value if username else "free"
     }
 
 # ──────────────────────────────
-# Startup
+# Startup Event
 # ──────────────────────────────
 @app.on_event("startup")
 def startup():
     init_db()
-    logger.info("[STARTUP] KI-Chat gestartet")
+    logger.info("[STARTUP] KI-Chat mit API, Analytics und Subscription-System gestartet")
