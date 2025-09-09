@@ -142,6 +142,7 @@
         .stat-card:nth-child(2) { --accent-color: #2ecc71; }
         .stat-card:nth-child(3) { --accent-color: #f39c12; }
         .stat-card:nth-child(4) { --accent-color: #e74c3c; }
+        .stat-card:nth-child(5) { --accent-color: #9b59b6; }
 
         .stat-card:hover {
             transform: translateY(-5px);
@@ -159,6 +160,44 @@
             color: #bdc3c7;
             font-weight: 600;
             font-size: 1.1rem;
+        }
+
+        .admin-controls {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            border: 1px solid #34495e;
+            border-radius: 15px;
+            padding: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .admin-controls h3 {
+            color: #e74c3c;
+            margin-bottom: 1.5rem;
+            font-size: 1.3rem;
+        }
+
+        .control-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .control-group label {
+            color: #bdc3c7;
+            font-weight: 500;
+            margin-right: 10px;
+        }
+
+        .control-group input,
+        .control-group select {
+            padding: 0.5rem 1rem;
+            border: 1px solid #34495e;
+            border-radius: 8px;
+            background: #2c3e50;
+            color: #ecf0f1;
+            font-size: 0.9rem;
         }
 
         .users-section {
@@ -214,11 +253,12 @@
         }
 
         .users-table tbody tr {
-            transition: background-color 0.3s ease;
+            transition: all 0.3s ease;
         }
 
         .users-table tbody tr:hover {
             background: rgba(52, 73, 94, 0.3);
+            transform: scale(1.01);
         }
 
         .user-cell {
@@ -288,10 +328,38 @@
             border: 1px solid #3498db;
         }
 
+        .subscription-badge {
+            padding: 0.4rem 0.8rem;
+            border-radius: 15px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-top: 0.25rem;
+        }
+
+        .subscription-badge.free {
+            background: rgba(108, 117, 125, 0.2);
+            color: #6c757d;
+            border: 1px solid #6c757d;
+        }
+
+        .subscription-badge.premium {
+            background: rgba(255, 193, 7, 0.2);
+            color: #ffc107;
+            border: 1px solid #ffc107;
+        }
+
+        .subscription-badge.enterprise {
+            background: rgba(155, 89, 182, 0.2);
+            color: #9b59b6;
+            border: 1px solid #9b59b6;
+        }
+
         .actions-cell {
             display: flex;
             gap: 0.5rem;
             flex-wrap: wrap;
+            align-items: center;
         }
 
         .action-btn {
@@ -358,6 +426,33 @@
             transform: translateY(-2px);
         }
 
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2980b9;
+        }
+
+        .btn-warning {
+            background: #f39c12;
+            color: white;
+        }
+
+        .btn-warning:hover {
+            background: #e67e22;
+        }
+
+        .btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .btn-info:hover {
+            background: #138496;
+        }
+
         .password-input {
             padding: 0.4rem 0.8rem;
             border: 1px solid #34495e;
@@ -366,6 +461,16 @@
             color: #ecf0f1;
             font-size: 0.85rem;
             width: 150px;
+        }
+
+        .subscription-select {
+            padding: 0.4rem 0.8rem;
+            border: 1px solid #34495e;
+            border-radius: 5px;
+            background: #2c3e50;
+            color: #ecf0f1;
+            font-size: 0.85rem;
+            cursor: pointer;
         }
 
         .export-section {
@@ -391,6 +496,7 @@
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
+            margin: 0.5rem;
         }
 
         .export-btn:hover {
@@ -420,6 +526,107 @@
             text-align: center;
         }
 
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+        }
+
+        .modal-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #2c3e50;
+            border-radius: 15px;
+            padding: 2rem;
+            max-width: 400px;
+            width: 90%;
+            border: 1px solid #34495e;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #34495e;
+        }
+
+        .modal-title {
+            color: #e74c3c;
+            font-size: 1.3rem;
+            font-weight: 600;
+        }
+
+        .close {
+            background: none;
+            border: none;
+            color: #95a5a6;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+        }
+
+        .close:hover {
+            color: #ecf0f1;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            color: #bdc3c7;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #34495e;
+            border-radius: 8px;
+            background: #1a252f;
+            color: #ecf0f1;
+            font-size: 1rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #e74c3c;
+            box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.2);
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .admin-nav {
@@ -443,6 +650,11 @@
             .action-btn {
                 justify-content: center;
             }
+
+            .control-group {
+                flex-direction: column;
+                align-items: stretch;
+            }
         }
     </style>
 </head>
@@ -460,6 +672,7 @@
                 <div class="admin-avatar">A</div>
                 <div>Administrator</div>
                 <div class="nav-links">
+                    <a href="/admin/analytics" class="nav-link">📊 Analytics</a>
                     <a href="/chat" class="nav-link">💬 Chat</a>
                     <a href="/logout" class="nav-link">🚪 Abmelden</a>
                 </div>
@@ -475,20 +688,41 @@
         <!-- Statistics -->
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="stat-number">{{ users|length }}</div>
+                <div class="stat-number">{{ stats.total_users if stats else (users|length) }}</div>
                 <div class="stat-label">Gesamt Benutzer</div>
             </div>
             <div class="stat-card">
-                <div class="stat-number">{{ users.values()|selectattr("blocked", "equalto", false)|list|length }}</div>
-                <div class="stat-label">Aktive Benutzer</div>
+                <div class="stat-number">{{ stats.free_users if stats else (users.values()|selectattr("subscription", "equalto", "free")|list|length + users.values()|selectattr("subscription", "undefined")|list|length) }}</div>
+                <div class="stat-label">Free Benutzer</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ stats.premium_users if stats else (users.values()|selectattr("subscription", "equalto", "premium")|list|length + users.values()|selectattr("subscription", "equalto", "enterprise")|list|length) }}</div>
+                <div class="stat-label">Premium+ Benutzer</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ stats.blocked_users if stats else users.values()|selectattr("blocked", "equalto", true)|list|length }}</div>
+                <div class="stat-label">Gesperrte Benutzer</div>
             </div>
             <div class="stat-card">
                 <div class="stat-number">{{ users.values()|selectattr("is_admin", "equalto", true)|list|length }}</div>
                 <div class="stat-label">Administratoren</div>
             </div>
-            <div class="stat-card">
-                <div class="stat-number">{{ users.values()|selectattr("blocked", "equalto", true)|list|length }}</div>
-                <div class="stat-label">Gesperrte Benutzer</div>
+        </div>
+
+        <!-- Admin Controls -->
+        <div class="admin-controls">
+            <h3>Admin Kontrollen</h3>
+            
+            <div class="control-group">
+                <form method="post" action="/admin/change-password" style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                    <label>Admin Passwort ändern:</label>
+                    <input type="password" name="old_password" placeholder="Altes Passwort" required>
+                    <input type="password" name="new_password" placeholder="Neues Passwort" required>
+                    <button type="submit" class="action-btn btn-warning">🔑 Passwort ändern</button>
+                </form>
+                
+                <a href="/admin/export-csv" class="action-btn btn-info">📄 User Export (CSV)</a>
+                <a href="/admin/analytics" class="action-btn btn-primary">📊 Analytics Dashboard</a>
             </div>
         </div>
 
@@ -505,8 +739,8 @@
                         <thead>
                             <tr>
                                 <th>Benutzer</th>
-                                <th>Rolle</th>
-                                <th>Status</th>
+                                <th>Rolle & Status</th>
+                                <th>Subscription</th>
                                 <th>Aktionen</th>
                             </tr>
                         </thead>
@@ -530,13 +764,29 @@
                                     {% else %}
                                         <span class="status-badge role-user">Benutzer</span>
                                     {% endif %}
-                                </td>
-                                <td>
+                                    <br>
                                     {% if user_data.get('blocked') %}
                                         <span class="status-badge status-blocked">Gesperrt</span>
                                     {% else %}
                                         <span class="status-badge status-active">Aktiv</span>
                                     {% endif %}
+                                </td>
+                                <td>
+                                    <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                        <span class="subscription-badge {{ user_data.get('subscription', 'free') }}">
+                                            {{ (user_data.get('subscription', 'free')|title) }}
+                                        </span>
+                                        {% if username != "admin" %}
+                                        <form method="post" action="/admin/set-subscription" style="display: inline;">
+                                            <input type="hidden" name="username" value="{{ username }}">
+                                            <select name="subscription" class="subscription-select" onchange="this.form.submit()">
+                                                <option value="free" {% if (user_data.get('subscription', 'free')) == 'free' %}selected{% endif %}>Free</option>
+                                                <option value="premium" {% if user_data.get('subscription') == 'premium' %}selected{% endif %}>Premium</option>
+                                                <option value="enterprise" {% if user_data.get('subscription') == 'enterprise' %}selected{% endif %}>Enterprise</option>
+                                            </select>
+                                        </form>
+                                        {% endif %}
+                                    </div>
                                 </td>
                                 <td>
                                     {% if username != "admin" %}
@@ -567,13 +817,9 @@
                                             </form>
 
                                             <!-- Change Password -->
-                                            <form method="post" action="/admin/change-user-password" style="display: inline-flex; gap: 0.5rem; align-items: center;">
-                                                <input type="hidden" name="username" value="{{ username }}">
-                                                <input type="password" name="new_password" placeholder="Neues Passwort" class="password-input" required>
-                                                <button type="submit" class="action-btn btn-password">
-                                                    🔑 Ändern
-                                                </button>
-                                            </form>
+                                            <button type="button" class="action-btn btn-password" onclick="openPasswordModal('{{ username }}')">
+                                                🔑 Passwort ändern
+                                            </button>
 
                                             <!-- Delete User -->
                                             <form method="post" action="/admin/delete-user" style="display: inline;">
@@ -606,10 +852,71 @@
             <a href="/admin/export-csv" class="export-btn">
                 📊 Benutzerdaten als CSV exportieren
             </a>
+            <a href="/admin/analytics" class="export-btn">
+                📈 Analytics Dashboard öffnen
+            </a>
         </div>
     </main>
 
+    <!-- Password Change Modal -->
+    <div id="passwordModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Passwort ändern</h3>
+                <button class="close" onclick="closePasswordModal()">&times;</button>
+            </div>
+            <form method="post" action="/admin/change-user-password" id="passwordForm">
+                <input type="hidden" name="username" id="modalUsername">
+                <div class="form-group">
+                    <label for="newPassword">Neues Passwort:</label>
+                    <input type="password" name="new_password" id="newPassword" required>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" onclick="closePasswordModal()" class="btn-secondary">Abbrechen</button>
+                    <button type="submit" class="action-btn btn-primary">🔑 Passwort ändern</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
+        function openPasswordModal(username) {
+            document.getElementById('modalUsername').value = username;
+            document.getElementById('passwordModal').style.display = 'block';
+        }
+
+        function closePasswordModal() {
+            document.getElementById('passwordModal').style.display = 'none';
+            document.getElementById('newPassword').value = '';
+        }
+
+        // Modal schließen wenn außerhalb geklickt wird
+        window.onclick = function(event) {
+            const modal = document.getElementById('passwordModal');
+            if (event.target === modal) {
+                closePasswordModal();
+            }
+        }
+
+        // Subscription-Änderung Bestätigung
+        document.querySelectorAll('select[name="subscription"]').forEach(select => {
+            select.addEventListener('change', function(e) {
+                const username = this.form.querySelector('input[name="username"]').value;
+                const newTier = this.value;
+                
+                if (!confirm(`Subscription für ${username} zu ${newTier.toUpperCase()} ändern?`)) {
+                    e.preventDefault();
+                    // Reset auf ursprünglichen Wert
+                    this.value = this.dataset.original || 'free';
+                    return false;
+                }
+                this.dataset.original = newTier;
+            });
+            
+            // Ursprünglichen Wert speichern
+            select.dataset.original = select.value;
+        });
+
         // Confirmation dialogs for destructive actions
         document.addEventListener('DOMContentLoaded', function() {
             // Add loading states to buttons
@@ -617,7 +924,7 @@
             forms.forEach(form => {
                 form.addEventListener('submit', function(e) {
                     const button = this.querySelector('button[type="submit"]');
-                    if (button && !button.onclick) { // Skip if it has onclick (confirmation)
+                    if (button && !button.onclick && !button.hasAttribute('onclick')) {
                         const originalText = button.innerHTML;
                         button.disabled = true;
                         button.innerHTML = '⏳ Verarbeite...';
@@ -635,12 +942,10 @@
             const userRows = document.querySelectorAll('.users-table tbody tr');
             userRows.forEach(row => {
                 row.addEventListener('mouseenter', function() {
-                    this.style.transform = 'scale(1.01)';
-                    this.style.boxShadow = '0 5px 15px rgba(0,0,0,0.1)';
+                    this.style.boxShadow = '0 5px 15px rgba(231, 76, 60, 0.2)';
                 });
                 
                 row.addEventListener('mouseleave', function() {
-                    this.style.transform = 'scale(1)';
                     this.style.boxShadow = 'none';
                 });
             });
@@ -657,7 +962,108 @@
                     card.style.transform = 'translateY(0)';
                 }, index * 150);
             });
+
+            // Auto-refresh statistics every 30 seconds
+            setInterval(() => {
+                fetch(window.location.href + '?ajax=1')
+                    .then(response => response.text())
+                    .then(html => {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        const newStats = doc.querySelectorAll('.stat-number');
+                        const currentStats = document.querySelectorAll('.stat-number');
+                        
+                        newStats.forEach((newStat, index) => {
+                            if (currentStats[index] && newStat.textContent !== currentStats[index].textContent) {
+                                currentStats[index].textContent = newStat.textContent;
+                                currentStats[index].style.animation = 'pulse 0.5s';
+                            }
+                        });
+                    })
+                    .catch(console.error);
+            }, 30000);
+
+            // Toast notifications for successful actions
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('success')) {
+                showToast('Aktion erfolgreich ausgeführt!', 'success');
+            }
         });
+
+        // Toast notification system
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: ${type === 'success' ? '#2ecc71' : type === 'error' ? '#e74c3c' : '#3498db'};
+                color: white;
+                padding: 1rem 1.5rem;
+                border-radius: 8px;
+                z-index: 10000;
+                font-weight: 500;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+                transform: translateX(100%);
+                transition: transform 0.3s ease;
+            `;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => toast.style.transform = 'translateX(0)', 100);
+            setTimeout(() => {
+                toast.style.transform = 'translateX(100%)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
     </script>
+
+    <style>
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .loading {
+            opacity: 0.7;
+            pointer-events: none;
+        }
+
+        /* Smooth transitions for table rows */
+        .users-table tbody tr {
+            transition: all 0.3s ease;
+        }
+
+        /* Focus styles for accessibility */
+        button:focus,
+        input:focus,
+        select:focus {
+            outline: 2px solid #e74c3c;
+            outline-offset: 2px;
+        }
+
+        /* Improved mobile responsiveness */
+        @media (max-width: 480px) {
+            .stat-card {
+                padding: 1.5rem;
+            }
+            
+            .stat-number {
+                font-size: 2rem;
+            }
+            
+            .users-table th,
+            .users-table td {
+                padding: 0.75rem 0.5rem;
+                font-size: 0.85rem;
+            }
+            
+            .action-btn {
+                padding: 0.4rem 0.8rem;
+                font-size: 0.75rem;
+            }
+        }
+    </style>
 </body>
 </html>
