@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Keys - KI Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #f8f9fa;
+            padding-bottom: 20px;
+        }
+        
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1.1rem;
+        }
+        
+        .generate-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .generate-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 15px;
+        }
+        
+        .generate-btn:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+        }
+        
+        .generate-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .key-display {
+            display: none;
+            background: white;
+            border: 2px solid #007bff;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 15px;
+        }
+        
+        .key-display.show {
+            display: block;
+        }
+        
+        .api-key-text {
+            font-family: 'Courier New', monospace;
+            background: #f1f3f4;
+            padding: 10px;
+            border-radius: 5px;
+            word-break: break-all;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+        
+        .copy-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .copy-btn:hover {
+            background: #218838;
+        }
+        
+        .existing-keys {
+            margin-top: 30px;
+        }
+        
+        .keys-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .keys-table th,
+        .keys-table td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .keys-table th {
+            background: #007bff;
+            color: white;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        
+        .keys-table tbody tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .key-preview {
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .key-stats {
+            display: flex;
+            gap: 15px;
+            font-size: 14px;
+        }
+        
+        .stat-item {
+            background: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+        
+        .date-text {
+            color: #666;
+            font-size: 13px;
+        }
+        
+        .revoke-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .revoke-btn:hover {
+            background: #c82333;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #666;
+        }
+        
+        .empty-state h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .nav-links {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
+        }
+        
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 15px;
+            font-weight: 500;
+            padding: 8px 16px;
+            border-radius: 5px;
+            transition: all 0.3s ease;
+        }
+        
+        .nav-links a:hover {
+            background: #007bff;
+            color: white;
+        }
+        
+        .alert {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .info-box {
+            background: #e3f2fd;
+            border: 1px solid #2196f3;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .info-box h4 {
+            color: #1976d2;
+            margin-bottom: 10px;
+        }
+        
+        .info-box ul {
+            color: #333;
+            padding-left: 20px;
+        }
+        
+        .info-box li {
+            margin-bottom: 5px;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                margin: 10px;
+            }
+            
+            .keys-table {
+                font-size: 14px;
+            }
+            
+            .keys-table th,
+            .keys-table td {
+                padding: 10px 8px;
+            }
+            
+            .key-stats {
+                flex-direction: column;
+                gap: 5px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>API Keys Verwaltung</h1>
+            <p>Erstelle und verwalte API-Schlüssel für den programmatischen Zugriff</p>
+        </div>
+
+        <div class="info-box">
+            <h4>Was sind API Keys?</h4>
+            <ul>
+                <li>Ermöglichen programmatischen Zugriff auf die KI-Chat API</li>
+                <li>Nutze sie in deinen eigenen Anwendungen und Scripts</li>
+                <li>Jeder Key hat die gleichen Limits wie dein Account</li>
+                <li>Maximum 5 aktive Keys pro Benutzer</li>
+            </ul>
+        </div>
+
+        <div class="generate-section">
+            <h3 style="margin-bottom: 15px; color: #333;">Neuen API Key generieren</h3>
+            <button class="generate-btn" id="generateBtn" onclick="generateApiKey()">
+                Neuen API Key erstellen
+            </button>
+            
+            <div class="key-display" id="keyDisplay">
+                <h4 style="color: #007bff; margin-bottom: 10px;">Dein neuer API Key:</h4>
+                <div class="api-key-text" id="apiKeyText"></div>
+                <button class="copy-btn" onclick="copyApiKey()">In Zwischenablage kopieren</button>
+                <p style="color: #dc3545; font-size: 14px; margin-top: 10px;">
+                    ⚠️ Speichere diesen Key sicher - er wird nur einmal angezeigt!
+                </p>
+            </div>
+        </div>
+
+        <div class="existing-keys">
+            <h3 style="margin-bottom: 20px; color: #333;">Deine API Keys</h3>
+            
+            {% if api_keys %}
+            <table class="keys-table">
+                <thead>
+                    <tr>
+                        <th>API Key</th>
+                        <th>Erstellt</th>
+                        <th>Letzte Nutzung</th>
+                        <th>Statistiken</th>
+                        <th>Aktionen</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for key_data in api_keys %}
+                    <tr>
+                        <td>
+                            <div class="key-preview">{{ key_data.api_key[:12] }}...{{ key_data.api_key[-4:] }}</div>
+                        </td>
+                        <td>
+                            <div class="date-text">{{ key_data.created_at[:10] if key_data.created_at else 'Unbekannt' }}</div>
+                        </td>
+                        <td>
+                            <div class="date-text">
+                                {% if key_data.last_used %}
+                                    {{ key_data.last_used[:10] }}
+                                {% else %}
+                                    Nie verwendet
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td>
+                            <div class="key-stats">
+                                <span class="stat-item">Heute: {{ key_data.requests_today }}</span>
+                                <span class="stat-item">Gesamt: {{ key_data.total_requests }}</span>
+                            </div>
+                        </td>
+                        <td>
+                            <form method="post" action="/api/keys/revoke" style="display: inline;" 
+                                  onsubmit="return confirm('API Key wirklich widerrufen?')">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="api_key" value="{{ key_data.api_key }}">
+                                <button type="submit" class="revoke-btn">Widerrufen</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <h3>Keine API Keys vorhanden</h3>
+                <p>Erstelle deinen ersten API Key, um loszulegen!</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="nav-links">
+            <a href="/subscription">Subscription verwalten</a>
+            <a href="/chat">Zurück zum Chat</a>
+        </div>
+    </div>
+
+    <script>
+        let currentApiKey = '';
+
+        async function generateApiKey() {
+            const btn = document.getElementById('generateBtn');
+            const display = document.getElementById('keyDisplay');
+            
+            btn.disabled = true;
+            btn.textContent = 'Generiere...';
+            
+            try {
+                const response = await fetch('/api/generate-key', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+                
+                const data = await response.json();
+                
+                if (data.api_key) {
+                    currentApiKey = data.api_key;
+                    document.getElementById('apiKeyText').textContent = data.api_key;
+                    display.classList.add('show');
+                    
+                    // Button Text aktualisieren
+                    btn.textContent = `API Key generiert (${data.existing_keys}/5)`;
+                    
+                    // Seite nach 10 Sekunden neu laden um neue Keys anzuzeigen
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 10000);
+                    
+                } else {
+                    alert('Fehler: ' + (data.error || 'Unbekannter Fehler'));
+                    btn.disabled = false;
+                    btn.textContent = 'Neuen API Key erstellen';
+                }
+                
+            } catch (error) {
+                alert('Fehler beim Generieren des API Keys');
+                btn.disabled = false;
+                btn.textContent = 'Neuen API Key erstellen';
+            }
+        }
+
+        function copyApiKey() {
+            if (currentApiKey) {
+                navigator.clipboard.writeText(currentApiKey).then(() => {
+                    const btn = event.target;
+                    const originalText = btn.textContent;
+                    btn.textContent = 'Kopiert!';
+                    btn.style.background = '#28a745';
+                    
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.style.background = '';
+                    }, 2000);
+                }).catch(() => {
+                    // Fallback für ältere Browser
+                    const textArea = document.createElement('textarea');
+                    textArea.value = currentApiKey;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    
+                    alert('API Key in Zwischenablage kopiert!');
+                });
+            }
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                window.location.href = '/chat';
+            }
+            
+            if (e.ctrlKey && e.key === 'n') {
+                e.preventDefault();
+                generateApiKey();
+            }
+        });
+    // Dark Mode Toggle - Füge dieses JavaScript zu deinen Templates hinzu
+
+// CSS-Variablen für Theme-Switching
+const themes = {
+    dark: {
+        '--bg-primary': '#1a1a2e',
+        '--bg-secondary': '#2c3e50',
+        '--bg-tertiary': '#34495e',
+        '--text-primary': '#ecf0f1',
+        '--text-secondary': '#bdc3c7',
+        '--text-muted': '#95a5a6',
+        '--accent-color': '#e74c3c',
+        '--accent-hover': '#c0392b',
+        '--border-color': '#34495e',
+        '--shadow': 'rgba(0,0,0,0.3)',
+        '--success': '#2ecc71',
+        '--warning': '#f39c12',
+        '--danger': '#e74c3c',
+        '--info': '#3498db'
+    },
+    light: {
+        '--bg-primary': '#ffffff',
+        '--bg-secondary': '#f8f9fa',
+        '--bg-tertiary': '#e9ecef',
+        '--text-primary': '#333333',
+        '--text-secondary': '#666666',
+        '--text-muted': '#999999',
+        '--accent-color': '#007bff',
+        '--accent-hover': '#0056b3',
+        '--border-color': '#dee2e6',
+        '--shadow': 'rgba(0,0,0,0.1)',
+        '--success': '#28a745',
+        '--warning': '#ffc107',
+        '--danger': '#dc3545',
+        '--info': '#17a2b8'
+    }
+};
+
+// Theme-Management Klasse
+class ThemeManager {
+    constructor() {
+        this.currentTheme = this.getStoredTheme() || 'dark';
+        this.init();
+    }
+    
+    init() {
+        this.applyTheme(this.currentTheme);
+        this.createToggleButton();
+        this.addKeyboardShortcut();
+    }
+    
+    getStoredTheme() {
+        return localStorage.getItem('user-theme') || 'dark';
+    }
+    
+    setStoredTheme(theme) {
+        localStorage.setItem('user-theme', theme);
+    }
+    
+    applyTheme(theme) {
+        const root = document.documentElement;
+        const themeVars = themes[theme];
+        
+        if (themeVars) {
+            Object.entries(themeVars).forEach(([property, value]) => {
+                root.style.setProperty(property, value);
+            });
+            
+            // Body-Klasse für spezifische Styles
+            document.body.className = document.body.className.replace(/theme-\w+/g, '');
+            document.body.classList.add(`theme-${theme}`);
+            
+            this.currentTheme = theme;
+            this.setStoredTheme(theme);
+            
+            // Server benachrichtigen (falls eingeloggt)
+            this.syncWithServer(theme);
+        }
+    }
+    
+    toggleTheme() {
+        const newTheme = this.currentTheme === 'dark' ? 'light' : 'dark';
+        this.applyTheme(newTheme);
+        
+        // Animation für smooth transition
+        document.body.style.transition = 'all 0.3s ease';
+        setTimeout(() => {
+            document.body.style.transition = '';
+        }, 300);
+    }
+    
+    createToggleButton() {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'theme-toggle';
+        toggleBtn.innerHTML = this.getThemeIcon();
+        toggleBtn.title = `Zu ${this.currentTheme === 'dark' ? 'Hellem' : 'Dunklem'} Modus wechseln`;
+        toggleBtn.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: 2px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 20px;
+            cursor: pointer;
+            z-index: 1000;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px var(--shadow);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        toggleBtn.addEventListener('click', () => {
+            this.toggleTheme();
+            toggleBtn.innerHTML = this.getThemeIcon();
+            toggleBtn.title = `Zu ${this.currentTheme === 'dark' ? 'Hellem' : 'Dunklem'} Modus wechseln`;
+            
+            // Button animation
+            toggleBtn.style.transform = 'scale(0.9)';
+            setTimeout(() => {
+                toggleBtn.style.transform = 'scale(1)';
+            }, 150);
+        });
+        
+        toggleBtn.addEventListener('mouseenter', () => {
+            toggleBtn.style.transform = 'scale(1.1)';
+            toggleBtn.style.boxShadow = '0 6px 20px var(--shadow)';
+        });
+        
+        toggleBtn.addEventListener('mouseleave', () => {
+            toggleBtn.style.transform = 'scale(1)';
+            toggleBtn.style.boxShadow = '0 4px 15px var(--shadow)';
+        });
+        
+        document.body.appendChild(toggleBtn);
+    }
+    
+    getThemeIcon() {
+        return this.currentTheme === 'dark' ? '☀️' : '🌙';
+    }
+    
+    addKeyboardShortcut() {
+        document.addEventListener('keydown', (e) => {
+            // Ctrl/Cmd + Shift + D für Theme-Toggle
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'D') {
+                e.preventDefault();
+                this.toggleTheme();
+                document.getElementById('theme-toggle').innerHTML = this.getThemeIcon();
+            }
+        });
+    }
+    
+    async syncWithServer(theme) {
+        // Nur wenn User eingeloggt ist
+        try {
+            const sessionResponse = await fetch('/api/session-info');
+            const sessionData = await sessionResponse.json();
+            
+            if (sessionData.active) {
+                await fetch('/settings/theme', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `theme=${theme}`
+                });
+            }
+        } catch (error) {
+            console.log('Theme sync failed:', error);
+        }
+    }
+}
+
+// CSS für Theme-Support (füge zu <head> hinzu)
+const themeCSS = `
+    :root {
+        /* Default Dark Theme */
+        --bg-primary: #1a1a2e;
+        --bg-secondary: #2c3e50;
+        --bg-tertiary: #34495e;
+        --text-primary: #ecf0f1;
+        --text-secondary: #bdc3c7;
+        --text-muted: #95a5a6;
+        --accent-color: #e74c3c;
+        --accent-hover: #c0392b;
+        --border-color: #34495e;
+        --shadow: rgba(0,0,0,0.3);
+        --success: #2ecc71;
+        --warning: #f39c12;
+        --danger: #e74c3c;
+        --info: #3498db;
+    }
+    
+    /* Smooth transitions für Theme-Wechsel */
+    *, *::before, *::after {
+        transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    }
+    
+    /* Theme-spezifische Anpassungen */
+    .theme-light {
+        background: var(--bg-primary) !important;
+        color: var(--text-primary) !important;
+    }
+    
+    .theme-dark {
+        background: var(--bg-primary) !important;
+        color: var(--text-primary) !important;
+    }
+    
+    /* Responsive Theme Toggle Button */
+    @media (max-width: 768px) {
+        #theme-toggle {
+            top: 10px !important;
+            right: 10px !important;
+            width: 45px !important;
+            height: 45px !important;
+            font-size: 18px !important;
+        }
+    }
+    
+    /* Focus styles für Accessibility */
+    #theme-toggle:focus {
+        outline: 2px solid var(--accent-color);
+        outline-offset: 2px;
+    }
+`;
+
+// Theme-CSS in Head einfügen
+function addThemeCSS() {
+    const style = document.createElement('style');
+    style.textContent = themeCSS;
+    document.head.appendChild(style);
+}
+
+// Auto-Initialize wenn DOM geladen ist
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        addThemeCSS();
+        window.themeManager = new ThemeManager();
+    });
+} else {
+    addThemeCSS();
+    window.themeManager = new ThemeManager();
+}
+
+// Utility-Funktionen für Template-Integration
+window.ThemeUtils = {
+    // Für bestehende Templates: Theme-bewusste Farben
+    getThemedColor: (lightColor, darkColor) => {
+        const currentTheme = window.themeManager?.currentTheme || 'dark';
+        return currentTheme === 'light' ? lightColor : darkColor;
+    },
+    
+    // Theme-Status abfragen
+    getCurrentTheme: () => {
+        return window.themeManager?.currentTheme || 'dark';
+    },
+    
+    // Theme programmatisch setzen
+    setTheme: (theme) => {
+        if (window.themeManager && themes[theme]) {
+            window.themeManager.applyTheme(theme);
+        }
+    }
+};
+
+// Für Templates: Theme-Change Event
+document.addEventListener('themeChanged', (e) => {
+    console.log('Theme changed to:', e.detail.theme);
+    // Hier können weitere Theme-spezifische Anpassungen gemacht werden
+});
+
+// Theme-Change Event dispatchen
+const originalApplyTheme = ThemeManager.prototype.applyTheme;
+ThemeManager.prototype.applyTheme = function(theme) {
+    originalApplyTheme.call(this, theme);
+    
+    const event = new CustomEvent('themeChanged', {
+        detail: { theme: theme }
+    });
+    document.dispatchEvent(event);
+};
+
+// Export für Module (falls verwendet)
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { ThemeManager, themes };
+}</script>
+</body>
+</html>
