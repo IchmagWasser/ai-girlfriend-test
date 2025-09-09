@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscription - KI Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .current-plan {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .current-plan .tier {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+            text-transform: uppercase;
+        }
+        
+        .usage-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .usage-card {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .usage-card h3 {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        
+        .usage-card .number {
+            font-size: 28px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        
+        .pricing-tiers {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .tier-card {
+            border: 2px solid #e9ecef;
+            border-radius: 15px;
+            padding: 25px;
+            text-align: center;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        
+        .tier-card:hover {
+            border-color: #007bff;
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,123,255,0.1);
+        }
+        
+        .tier-card.current {
+            border-color: #28a745;
+            background: #f8fff9;
+        }
+        
+        .tier-card.premium {
+            border-color: #ffc107;
+            background: linear-gradient(135deg, #fff7e6 0%, #fff3cd 100%);
+        }
+        
+        .tier-card.enterprise {
+            border-color: #6f42c1;
+            background: linear-gradient(135deg, #f8f7ff 0%, #e9ecef 100%);
+        }
+        
+        .tier-name {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        
+        .tier-price {
+            font-size: 32px;
+            font-weight: bold;
+            color: #007bff;
+            margin-bottom: 20px;
+        }
+        
+        .tier-features {
+            list-style: none;
+            margin-bottom: 25px;
+        }
+        
+        .tier-features li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .tier-features li:last-child {
+            border-bottom: none;
+        }
+        
+        .tier-features .check {
+            color: #28a745;
+            margin-right: 8px;
+        }
+        
+        .tier-features .cross {
+            color: #dc3545;
+            margin-right: 8px;
+        }
+        
+        .upgrade-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .upgrade-btn:hover {
+            background: #0056b3;
+            transform: scale(1.05);
+        }
+        
+        .upgrade-btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .current-badge {
+            position: absolute;
+            top: -10px;
+            right: 20px;
+            background: #28a745;
+            color: white;
+            padding: 5px 15px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .nav-links {
+            text-align: center;
+            margin-top: 30px;
+        }
+        
+        .nav-links a {
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 15px;
+            font-weight: 500;
+        }
+        
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+        
+        .alert {
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .api-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 30px;
+        }
+        
+        .api-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .api-key-btn {
+            background: #17a2b8;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        
+        .api-key-btn:hover {
+            background: #138496;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Subscription Verwaltung</h1>
+            <p>Verwalte dein Abonnement und sieh deine Nutzung ein</p>
+        </div>
+
+        {% if request.args.get('success') %}
+        <div class="alert success">
+            Subscription erfolgreich aktualisiert!
+        </div>
+        {% endif %}
+
+        {% if request.args.get('error') %}
+        <div class="alert error">
+            Fehler beim Aktualisieren der Subscription.
+        </div>
+        {% endif %}
+
+        <div class="current-plan">
+            <h2>Aktueller Plan</h2>
+            <div class="tier">{{ current_tier.title() }}</div>
+        </div>
+
+        <div class="usage-stats">
+            <div class="usage-card">
+                <h3>Nachrichten Heute</h3>
+                <div class="number">{{ usage.messages_today }}</div>
+                <small>von {{ limits.messages_per_day if limits.messages_per_day != -1 else "∞" }}</small>
+            </div>
+            <div class="usage-card">
+                <h3>API-Calls Heute</h3>
+                <div class="number">{{ usage.api_calls_today }}</div>
+                <small>von {{ limits.api_calls_per_day if limits.api_calls_per_day != -1 else "∞" }}</small>
+            </div>
+            <div class="usage-card">
+                <h3>Gesamt Nachrichten</h3>
+                <div class="number">{{ usage.total_messages }}</div>
+            </div>
+            <div class="usage-card">
+                <h3>Verfügbare Personas</h3>
+                <div class="number">{{ limits.personas|length }}</div>
+            </div>
+        </div>
+
+        <h2 style="text-align: center; margin-bottom: 30px;">Verfügbare Pläne</h2>
+        
+        <div class="pricing-tiers">
+            <!-- Free Tier -->
+            <div class="tier-card {% if current_tier == 'free' %}current{% endif %}">
+                {% if current_tier == 'free' %}
+                <div class="current-badge">Aktueller Plan</div>
+                {% endif %}
+                <div class="tier-name" style="color: #6c757d;">Free</div>
+                <div class="tier-price">0€<small>/Monat</small></div>
+                <ul class="tier-features">
+                    <li><span class="check">✓</span> {{ tiers.free.messages_per_day }} Nachrichten/Tag</li>
+                    <li><span class="check">✓</span> {{ tiers.free.api_calls_per_day }} API-Calls/Tag</li>
+                    <li><span class="check">✓</span> {{ tiers.free.personas|length }} Basis-Personas</li>
+                    <li><span class="check">✓</span> Chat-Verlauf</li>
+                    <li><span class="cross">✗</span> Markdown-Rendering</li>
+                    <li><span class="cross">✗</span> TTS Support</li>
+                </ul>
+                <form method="post" action="/subscription/upgrade" style="display: inline;">
+                    <input type="hidden" name="tier" value="free">
+                    <button type="submit" class="upgrade-btn" {% if current_tier == 'free' %}disabled{% endif %}>
+                        {% if current_tier == 'free' %}Aktueller Plan{% else %}Zu Free wechseln{% endif %}
+                    </button>
+                </form>
+            </div>
+
+            <!-- Premium Tier -->
+            <div class="tier-card premium {% if current_tier == 'premium' %}current{% endif %}">
+                {% if current_tier == 'premium' %}
+                <div class="current-badge">Aktueller Plan</div>
+                {% endif %}
+                <div class="tier-name" style="color: #ffc107;">Premium</div>
+                <div class="tier-price">9€<small>/Monat</small></div>
+                <ul class="tier-features">
+                    <li><span class="check">✓</span> {{ tiers.premium.messages_per_day }} Nachrichten/Tag</li>
+                    <li><span class="check">✓</span> {{ tiers.premium.api_calls_per_day }} API-Calls/Tag</li>
+                    <li><span class="check">✓</span> Alle {{ tiers.premium.personas|length }} Personas</li>
+                    <li><span class="check">✓</span> Erweiterte Chat-Historie</li>
+                    <li><span class="check">✓</span> Markdown-Rendering</li>
+                    <li><span class="check">✓</span> TTS Support</li>
+                    <li><span class="check">✓</span> Export-Funktionen</li>
+                </ul>
+                <form method="post" action="/subscription/upgrade" style="display: inline;">
+                    <input type="hidden" name="tier" value="premium">
+                    <button type="submit" class="upgrade-btn" {% if current_tier == 'premium' %}disabled{% endif %}>
+                        {% if current_tier == 'premium' %}Aktueller Plan{% else %}Zu Premium upgraden{% endif %}
+                    </button>
+                </form>
+            </div>
+
+            <!-- Enterprise Tier -->
+            <div class="tier-card enterprise {% if current_tier == 'enterprise' %}current{% endif %}">
+                {% if current_tier == 'enterprise' %}
+                <div class="current-badge">Aktueller Plan</div>
+                {% endif %}
+                <div class="tier-name" style="color: #6f42c1;">Enterprise</div>
+                <div class="tier-price">49€<small>/Monat</small></div>
+                <ul class="tier-features">
+                    <li><span class="check">✓</span> Unbegrenzte Nachrichten</li>
+                    <li><span class="check">✓</span> Unbegrenzte API-Calls</li>
+                    <li><span class="check">✓</span> Alle Premium-Features</li>
+                    <li><span class="check">✓</span> Erweiterte Chat-Historie (50)</li>
+                    <li><span class="check">✓</span> Priority Support</li>
+                    <li><span class="check">✓</span> Custom Personas</li>
+                    <li><span class="check">✓</span> Analytics Dashboard</li>
+                </ul>
+                <form method="post" action="/subscription/upgrade" style="display: inline;">
+                    <input type="hidden" name="tier" value="enterprise">
+                    <button type="submit" class="upgrade-btn" {% if current_tier == 'enterprise' %}disabled{% endif %}>
+                        {% if current_tier == 'enterprise' %}Aktueller Plan{% else %}Zu Enterprise upgraden{% endif %}
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div class="api-section">
+            <h3>API-Zugang</h3>
+            <p>Generiere einen API-Key für den programmatischen Zugriff auf den KI-Chat.</p>
+            <button class="api-key-btn" onclick="generateApiKey()">API-Key generieren</button>
+            <div id="api-key-result" style="margin-top: 15px; font-family: monospace; font-size: 14px;"></div>
+        </div>
+
+        <div class="nav-links">
+            <a href="/chat">Zurück zum Chat</a>
+            <a href="/persona">Personas verwalten</a>
+            {% if current_tier == 'enterprise' or username == 'admin' %}
+            <a href="/admin/analytics">Analytics Dashboard</a>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        async function generateApiKey() {
+            try {
+                const response = await fetch('/api/generate-key', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+                
+                const data = await response.json();
+                
+                if (data.api_key) {
+                    document.getElementById('api-key-result').innerHTML = `
+                        <div style="background: #e9ecef; padding: 15px; border-radius: 5px; margin-top: 10px;">
+                            <strong>API-Key:</strong><br>
+                            <code style="background: white; padding: 5px; border-radius: 3px; display: block; margin: 10px 0;">${data.api_key}</code>
+                            <small style="color: #666;">
+                                Verwende diesen Key in deinen HTTP-Headers: <code>X-API-Key: ${data.api_key}</code><br>
+                                Endpunkte: ${Object.values(data.endpoints).join(', ')}
+                            </small>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('api-key-result').innerHTML = `
+                        <div style="color: red; margin-top: 10px;">Fehler: ${data.error}</div>
+                    `;
+                }
+            } catch (error) {
+                document.getElementById('api-key-result').innerHTML = `
+                    <div style="color: red; margin-top: 10px;">Fehler beim Generieren des API-Keys</div>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>
