@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unterhaltungen - KI-Chat</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+</head>
+<body class="{% if theme == 'dark' %}bg-dark text-light{% else %}bg-light{% endif %}">
+    <nav class="navbar navbar-expand-lg {% if theme == 'dark' %}navbar-dark bg-dark{% else %}navbar-light bg-light{% endif %} border-bottom">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="/chat">
+                <i class="bi bi-robot me-2"></i>KI-Chat
+            </a>
+            
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/chat">
+                    <i class="bi bi-chat-dots me-1"></i>Chat
+                </a>
+                <a class="nav-link" href="/search">
+                    <i class="bi bi-search me-1"></i>Suche
+                </a>
+                <a class="nav-link active" href="/conversations">
+                    <i class="bi bi-collection me-1"></i>Unterhaltungen
+                </a>
+                <div class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
+                        <i class="bi bi-person-circle me-1"></i>{{ username }}
+                    </a>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="/persona">
+                            <i class="bi bi-emoji-smile me-1"></i>Persona
+                        </a></li>
+                        <li><a class="dropdown-item" href="/subscription">
+                            <i class="bi bi-star me-1"></i>Subscription
+                        </a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item" href="/logout">
+                            <i class="bi bi-box-arrow-right me-1"></i>Logout
+                        </a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-12">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <h2>
+                        <i class="bi bi-collection me-2"></i>Meine Unterhaltungen
+                    </h2>
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newConversationModal">
+                        <i class="bi bi-plus-circle me-1"></i>Neue Unterhaltung
+                    </button>
+                </div>
+                
+                {% if conversations %}
+                <div class="row">
+                    {% for conversation in conversations %}
+                    <div class="col-md-6 col-lg-4 mb-3">
+                        <div class="card h-100 {% if theme == 'dark' %}bg-secondary text-light{% endif %}">
+                            <div class="card-body">
+                                <h5 class="card-title">
+                                    <i class="bi bi-chat-text me-2"></i>
+                                    {{ conversation.title }}
+                                </h5>
+                                <p class="card-text text-muted small">
+                                    <i class="bi bi-calendar me-1"></i>
+                                    Erstellt: {{ conversation.created_at.strftime('%d.%m.%Y %H:%M') if conversation.created_at else 'Unbekannt' }}
+                                </p>
+                                <p class="card-text text-muted small">
+                                    <i class="bi bi-clock me-1"></i>
+                                    Letzte Aktivität: {{ conversation.last_activity.strftime('%d.%m.%Y %H:%M') if conversation.last_activity else 'Nie' }}
+                                </p>
+                                {% if conversation.message_count %}
+                                <p class="card-text text-muted small">
+                                    <i class="bi bi-chat-dots me-1"></i>
+                                    {{ conversation.message_count }} Nachrichten
+                                </p>
+                                {% endif %}
+                            </div>
+                            <div class="card-footer">
+                                <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                                    <a href="/chat/{{ conversation.id }}" class="btn btn-sm btn-primary">
+                                        <i class="bi bi-arrow-right me-1"></i>Öffnen
+                                    </a>
+                                    <button class="btn btn-sm btn-outline-secondary" onclick="archiveConversation('{{ conversation.id }}')">
+                                        <i class="bi bi-archive me-1"></i>Archivieren
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="text-center py-5">
+                    <i class="bi bi-collection display-1 text-muted"></i>
+                    <h4 class="mt-3 text-muted">Keine Unterhaltungen vorhanden</h4>
+                    <p class="text-muted">Erstelle deine erste Unterhaltung, um loszulegen.</p>
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newConversationModal">
+                        <i class="bi bi-plus-circle me-1"></i>Erste Unterhaltung erstellen
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- New Conversation Modal -->
+    <div class="modal fade" id="newConversationModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content {% if theme == 'dark' %}bg-dark text-light{% endif %}">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-plus-circle me-2"></i>Neue Unterhaltung erstellen
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="newConversationForm">
+                        <div class="mb-3">
+                            <label for="conversationTitle" class="form-label">Titel der Unterhaltung</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="conversationTitle" 
+                                   placeholder="z.B. Python Programmierung, Reiseplanung..."
+                                   required>
+                            <div class="form-text">
+                                Gib deiner Unterhaltung einen aussagekräftigen Namen
+                            </div>
+                        </div>
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="bi bi-x me-1"></i>Abbrechen
+                    </button>
+                    <button type="button" class="btn btn-primary" onclick="createNewConversation()">
+                        <i class="bi bi-plus-circle me-1"></i>Erstellen
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        async function createNewConversation() {
+            const title = document.getElementById('conversationTitle').value.trim();
+            const csrf_token = '{{ csrf_token }}';
+            
+            if (!title) {
+                alert('Bitte gib einen Titel für die Unterhaltung ein.');
+                return;
+            }
+            
+            try {
+                const formData = new FormData();
+                formData.append('title', title);
+                formData.append('csrf_token', csrf_token);
+                
+                const response = await fetch('/conversations/new', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Close modal and redirect to new conversation
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('newConversationModal'));
+                    modal.hide();
+                    
+                    // Redirect to the new conversation
+                    window.location.href = `/chat/${data.conversation_id}`;
+                } else {
+                    alert('Fehler beim Erstellen der Unterhaltung: ' + (data.error || 'Unbekannter Fehler'));
+                }
+                
+            } catch (error) {
+                console.error('Error creating conversation:', error);
+                alert('Fehler beim Erstellen der Unterhaltung.');
+            }
+        }
+        
+        async function archiveConversation(conversationId) {
+            if (!confirm('Möchtest du diese Unterhaltung wirklich archivieren?')) {
+                return;
+            }
+            
+            try {
+                const formData = new FormData();
+                formData.append('conversation_id', conversationId);
+                formData.append('csrf_token', '{{ csrf_token }}');
+                
+                const response = await fetch('/conversations/archive', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    location.reload(); // Reload page to show updated list
+                } else {
+                    alert('Fehler beim Archivieren der Unterhaltung.');
+                }
+                
+            } catch (error) {
+                console.error('Error archiving conversation:', error);
+                alert('Fehler beim Archivieren der Unterhaltung.');
+            }
+        }
+        
+        // Auto-focus title input when modal opens
+        document.getElementById('newConversationModal').addEventListener('shown.bs.modal', function () {
+            document.getElementById('conversationTitle').focus();
+        });
+        
+        // Submit form on Enter key
+        document.getElementById('conversationTitle').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                createNewConversation();
+            }
+        });
+    </script>
+</body>
+</html>
