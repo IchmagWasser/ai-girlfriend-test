@@ -28,9 +28,20 @@ import queue
 from datetime import datetime, timedelta
 from time import time as time_now
 from collections import defaultdict, OrderedDict
-import psutil
-import magic
-from PIL import Image
+from collections import defaultdict, OrderedDict
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    psutil = None
+
+try:
+    import magic
+    MAGIC_AVAILABLE = True
+except ImportError:
+    MAGIC_AVAILABLE = False
+    magic = None
 import PyPDF2
 import docx
 from concurrent.futures import ThreadPoolExecutor
