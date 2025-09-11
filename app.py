@@ -47,7 +47,12 @@ try:
 except ImportError:
     PyPDF2_AVAILABLE = False
     PyPDF2 = None
-import docx
+try:
+    import docx
+    docx_AVAILABLE = True
+except ImportError:
+    docx_AVAILABLE = False
+    docx = None    
 from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
