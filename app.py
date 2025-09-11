@@ -28,7 +28,6 @@ import queue
 from datetime import datetime, timedelta
 from time import time as time_now
 from collections import defaultdict, OrderedDict
-from collections import defaultdict, OrderedDict
 try:
     import psutil
     PSUTIL_AVAILABLE = True
