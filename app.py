@@ -351,8 +351,22 @@ class FileProcessor:
         """Process uploaded file and extract content"""
         content = await file.read()
         
-        # Detect file type
-        mime_type = magic.from_buffer(content, mime=True)
+        # Detect file type (fallback if magic is not available)
+        if MAGIC_AVAILABLE:
+            mime_type = magic.from_buffer(content, mime=True)
+        else:
+            # Simple fallback based on file extension
+            filename = file.filename.lower()
+            if filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                mime_type = 'image/jpeg'
+            elif filename.endswith('.pdf'):
+                mime_type = 'application/pdf'
+            elif filename.endswith('.docx'):
+                mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            elif filename.endswith('.txt'):
+                mime_type = 'text/plain'
+            else:
+                mime_type = 'application/octet-stream'
         
         result = {
             'filename': file.filename,
