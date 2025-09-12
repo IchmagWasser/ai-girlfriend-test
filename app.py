@@ -29,11 +29,6 @@ from datetime import datetime, timedelta
 from time import time as time_now
 from collections import defaultdict, OrderedDict
 # Optional imports with fallbacks
-import psutil
-import magic
-from PIL import Image
-import PyPDF2
-import docx
 from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
