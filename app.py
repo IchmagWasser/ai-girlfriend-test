@@ -1665,6 +1665,146 @@ async def login(request: Request, username: str = Form(...), password: str = For
         "request": request, 
         "error": "Falsche Anmeldedaten"
     })
+# ──────────────────────────────
+# Routes - Admin
+# ──────────────────────────────
+from jinja2 import TemplateNotFound
+
+def _require_admin(request: Request):
+    """Gemeinsame Guard-Checks für Admin-Seiten."""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    redirect = admin_redirect_guard(request)
+    if redirect:
+        return redirect
+    return None
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard(request: Request):
+    guard = _require_admin(request)
+    if guard:
+        return guard
+
+    users = get_all_users()
+    csrf_token = request.session.get("csrf_token", "")
+
+    # Versuche Template; wenn nicht vorhanden → Fallback HTML
+    tpl_path = os.path.join("templates", "admin.html")
+    if os.path.exists(tpl_path):
+        return templates.TemplateResponse("admin.html", {
+            "request": request,
+            "users": users,
+            "csrf_token": csrf_token
+        })
+    else:
+        # Einfache Fallback-Seite, damit /admin ohne Template funktioniert
+        rows = []
+        for uname, info in users.items():
+            rows.append(f"""
+            <tr>
+              <td>{html.escape(uname)}</td>
+              <td>{'✅' if info.get('is_admin', False) else '—'}</td>
+              <td>{'🚫 gesperrt' if info.get('blocked') else 'ok'}</td>
+              <td>{html.escape(info.get('subscription','free'))}</td>
+              <td style="display:flex;gap:8px;">
+                <form method="post" action="/admin/users/toggle-block">
+                  <input type="hidden" name="csrf_token" value="{csrf_token}">
+                  <input type="hidden" name="username" value="{html.escape(uname)}">
+                  <button type="submit">{'Entsperren' if info.get('blocked') else 'Sperren'}</button>
+                </form>
+                <form method="post" action="/admin/users/delete" onsubmit="return confirm('User wirklich löschen?')">
+                  <input type="hidden" name="csrf_token" value="{csrf_token}">
+                  <input type="hidden" name="username" value="{html.escape(uname)}">
+                  <button type="submit">Löschen</button>
+                </form>
+                <a href="/admin/export/{html.escape(uname)}">Export</a>
+              </td>
+            </tr>
+            """)
+        html_page = f"""
+        <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Admin Dashboard</title>
+            <style>
+              body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }}
+              table {{ border-collapse: collapse; width: 100%; }}
+              th, td {{ border: 1px solid #ddd; padding: 8px; }}
+              th {{ background: #f5f5f5; text-align: left; }}
+              form {{ display: inline; }}
+              button {{ cursor: pointer; }}
+            </style>
+          </head>
+          <body>
+            <h1>Admin Dashboard</h1>
+            <p>CSRF Token: <code>{csrf_token}</code></p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Benutzername</th>
+                  <th>Admin</th>
+                  <th>Status</th>
+                  <th>Subscription</th>
+                  <th>Aktionen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {''.join(rows)}
+              </tbody>
+            </table>
+          </body>
+        </html>
+        """
+        return HTMLResponse(content=html_page, status_code=200)
+
+@app.post("/admin/users/toggle-block")
+async def admin_toggle_block(request: Request, username: str = Form(...), csrf_token: str = Form(...)):
+    guard = _require_admin(request)
+    if guard:
+        return guard
+
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token", "")):
+        raise HTTPException(status_code=403, detail="Ungültiges CSRF-Token")
+
+    if username == "admin":
+        raise HTTPException(status_code=400, detail="Admin-Account kann nicht gesperrt werden")
+
+    toggle_user_block(username)
+    return RedirectResponse("/admin", status_code=302)
+
+@app.post("/admin/users/delete")
+async def admin_delete_user(request: Request, username: str = Form(...), csrf_token: str = Form(...)):
+    guard = _require_admin(request)
+    if guard:
+        return guard
+
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token", "")):
+        raise HTTPException(status_code=403, detail="Ungültiges CSRF-Token")
+
+    if username == "admin":
+        raise HTTPException(status_code=400, detail="Admin-Account kann nicht gelöscht werden")
+
+    delete_user_completely(username)
+    return RedirectResponse("/admin", status_code=302)
+
+@app.get("/admin/export/{username}")
+async def admin_export_user(request: Request, username: str):
+    guard = _require_admin(request)
+    if guard:
+        return guard
+
+    # Erstelle ZIP mit allen Userdaten
+    data = create_user_export_package(username)
+    fname = f"{username}_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"'
+        }
+    )
+
 
 # ──────────────────────────────
 # Startup: init DBs (CRITICAL)
