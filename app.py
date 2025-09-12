@@ -69,9 +69,7 @@ import aiofiles
 import httpx
 
 from ollama_chat import get_response, get_response_with_messages  
-from concurrent.futures import ThreadPoolExecutor
-import aiofiles
-import httpx
+
 
 # ──────────────────────────────
 # Enhanced Configuration & Setup
@@ -89,8 +87,8 @@ os.makedirs("logs", exist_ok=True)
 
 app = FastAPI(title="KI-Chat Advanced", version="2.0.0")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+# app.add_middleware(PerformanceMiddleware)  # <- Auskommentieren
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 templates = Jinja2Templates(directory="templates")
 
