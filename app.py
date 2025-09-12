@@ -28,6 +28,7 @@ import queue
 from datetime import datetime, timedelta
 from time import time as time_now
 from collections import defaultdict, OrderedDict
+
 # Optional imports with fallbacks
 try:
     import psutil
@@ -68,8 +69,7 @@ from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
 
-from ollama_chat import get_response, get_response_with_messages  
-
+from ollama_chat import get_response, get_response_with_messages
 
 # ──────────────────────────────
 # Enhanced Configuration & Setup
@@ -86,10 +86,9 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs("logs", exist_ok=True)
 
 app = FastAPI(title="KI-Chat Advanced", version="2.0.0")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-# app.add_middleware(PerformanceMiddleware)  # <- Auskommentieren
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Static & Templates
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # ──────────────────────────────
@@ -111,7 +110,7 @@ def setup_structured_logging():
         context_class=dict,
         cache_logger_on_first_use=True,
     )
-    
+
     # File handler for structured logs
     handler = logging.handlers.RotatingFileHandler(
         "logs/app.json",
@@ -119,11 +118,11 @@ def setup_structured_logging():
         backupCount=5
     )
     handler.setLevel(logging.INFO)
-    
+
     # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
-    
+
     # Root logger setup
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
@@ -165,19 +164,19 @@ class PerformanceMonitor:
     def __init__(self):
         self.metrics = []
         self.lock = threading.Lock()
-    
+
     def record_metric(self, metric: PerformanceMetrics):
         with self.lock:
             self.metrics.append(metric)
             # Keep only last 1000 metrics
             if len(self.metrics) > 1000:
                 self.metrics = self.metrics[-1000:]
-    
+
     def get_stats(self) -> Dict[str, Any]:
         with self.lock:
             if not self.metrics:
                 return {}
-            
+
             durations = [m.duration for m in self.metrics]
             return {
                 "total_requests": len(self.metrics),
@@ -187,12 +186,12 @@ class PerformanceMonitor:
                 "endpoints": self._get_endpoint_stats(),
                 "last_updated": datetime.now().isoformat()
             }
-    
+
     def _get_endpoint_stats(self):
         endpoint_stats = defaultdict(list)
         for metric in self.metrics:
             endpoint_stats[metric.endpoint].append(metric.duration)
-        
+
         return {
             endpoint: {
                 "count": len(durations),
@@ -215,50 +214,50 @@ class MemoryCache:
         self.lock = threading.Lock()
         self.hits = 0
         self.misses = 0
-    
+
     def get(self, key: str) -> Optional[Any]:
         with self.lock:
             if key not in self.cache:
                 self.misses += 1
                 return None
-            
+
             # Check TTL
             if time_now() - self.timestamps[key] > self.ttl:
                 del self.cache[key]
                 del self.timestamps[key]
                 self.misses += 1
                 return None
-            
+
             # Move to end (LRU)
             self.cache.move_to_end(key)
             self.hits += 1
             return self.cache[key]
-    
+
     def set(self, key: str, value: Any):
         with self.lock:
             if key in self.cache:
                 del self.cache[key]
-            
+
             self.cache[key] = value
             self.timestamps[key] = time_now()
-            
+
             # Remove oldest if over limit
             while len(self.cache) > self.max_size:
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
                 del self.timestamps[oldest_key]
-    
+
     def delete(self, key: str):
         with self.lock:
             if key in self.cache:
                 del self.cache[key]
                 del self.timestamps[key]
-    
+
     def clear(self):
         with self.lock:
             self.cache.clear()
             self.timestamps.clear()
-    
+
     def stats(self):
         return {
             "size": len(self.cache),
@@ -280,13 +279,13 @@ class DatabasePool:
         self.pool = queue.Queue(maxsize=pool_size)
         self.lock = threading.Lock()
         self.active_connections = 0
-        
+
         # Initialize pool
         for _ in range(pool_size):
             conn = sqlite3.connect(database_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             self.pool.put(conn)
-    
+
     def get_connection(self) -> sqlite3.Connection:
         try:
             conn = self.pool.get_nowait()
@@ -298,7 +297,7 @@ class DatabasePool:
             conn = sqlite3.connect(self.database_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             return conn
-    
+
     def return_connection(self, conn: sqlite3.Connection):
         try:
             # Reset connection state
@@ -309,7 +308,7 @@ class DatabasePool:
             conn.close()
             with self.lock:
                 self.active_connections -= 1
-    
+
     def close_all(self):
         while not self.pool.empty():
             conn = self.pool.get()
@@ -322,11 +321,11 @@ class DatabaseConnection:
     def __init__(self, pool: DatabasePool):
         self.pool = pool
         self.conn = None
-    
+
     def __enter__(self) -> sqlite3.Connection:
         self.conn = self.pool.get_connection()
         return self.conn
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
             if exc_type:
@@ -345,11 +344,11 @@ class BackgroundTaskManager:
         self.running = True
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
-    
+
     def add_task(self, func, *args, **kwargs):
         """Add a task to the background queue"""
         self.task_queue.put((func, args, kwargs))
-    
+
     def _worker(self):
         """Background worker thread"""
         while self.running:
@@ -361,7 +360,7 @@ class BackgroundTaskManager:
                 continue
             except Exception as e:
                 logger.error("Background task failed", error=str(e))
-    
+
     def shutdown(self):
         self.running = False
         self.executor.shutdown(wait=True)
@@ -377,12 +376,12 @@ class FileProcessor:
         'document': ['application/pdf', 'text/plain', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
         'text': ['text/plain', 'text/markdown', 'text/csv']
     }
-    
+
     @staticmethod
     async def process_file(file: UploadFile) -> Dict[str, Any]:
         """Process uploaded file and extract content"""
         content = await file.read()
-        
+
         # Detect file type (fallback if magic is not available)
         if MAGIC_AVAILABLE:
             mime_type = magic.from_buffer(content, mime=True)
@@ -399,7 +398,7 @@ class FileProcessor:
                 mime_type = 'text/plain'
             else:
                 mime_type = 'application/octet-stream'
-        
+
         result = {
             'filename': file.filename,
             'mime_type': mime_type,
@@ -407,28 +406,28 @@ class FileProcessor:
             'content': '',
             'metadata': {}
         }
-        
+
         try:
             if mime_type in FileProcessor.ALLOWED_TYPES['image']:
                 result['content'] = await FileProcessor._process_image(content)
                 result['type'] = 'image'
-            
+
             elif mime_type in FileProcessor.ALLOWED_TYPES['document']:
                 result['content'] = await FileProcessor._process_document(content, mime_type)
                 result['type'] = 'document'
-            
+
             elif mime_type in FileProcessor.ALLOWED_TYPES['text']:
                 result['content'] = content.decode('utf-8')
                 result['type'] = 'text'
-            
+
             else:
                 raise ValueError(f"Unsupported file type: {mime_type}")
-        
+
         except Exception as e:
             result['error'] = str(e)
-        
+
         return result
-    
+
     @staticmethod
     async def _process_image(content: bytes) -> str:
         """Process image file"""
@@ -437,7 +436,7 @@ class FileProcessor:
                 return f"Bild analysiert: {img.format} Format, Größe: {img.size[0]}x{img.size[1]} Pixel. Bereit für KI-Analyse."
         except Exception as e:
             return f"Fehler beim Verarbeiten des Bildes: {str(e)}"
-    
+
     @staticmethod
     async def _process_document(content: bytes, mime_type: str) -> str:
         """Extract text from document files"""
@@ -449,7 +448,7 @@ class FileProcessor:
                 for page in pdf_reader.pages:
                     text += page.extract_text() + "\n"
                 return text
-            
+
             elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
                 # DOCX processing
                 doc = docx.Document(io.BytesIO(content))
@@ -457,10 +456,10 @@ class FileProcessor:
                 for paragraph in doc.paragraphs:
                     text += paragraph.text + "\n"
                 return text
-            
+
             elif mime_type == 'text/plain':
                 return content.decode('utf-8')
-            
+
         except Exception as e:
             return f"Fehler beim Verarbeiten des Dokuments: {str(e)}"
 
@@ -492,45 +491,45 @@ class AIModelManager:
                 'max_tokens': 8192
             }
         }
-    
+
     async def get_response(self, messages: List[Dict], model: str = 'ollama', **kwargs) -> str:
         """Get response from specified AI model"""
         if model not in self.models or not self.models[model]['available']:
             model = 'ollama'  # Fallback
-        
+
         try:
             if model == 'ollama':
                 return get_response_with_messages(messages)
-            
+
             elif model.startswith('openai'):
                 return await self._get_openai_response(messages, model, **kwargs)
-            
+
             else:
                 raise ValueError(f"Unknown model: {model}")
-        
+
         except Exception as e:
             logger.error("AI model error", model=model, error=str(e))
             # Fallback to ollama
             if model != 'ollama':
                 return await self.get_response(messages, 'ollama', **kwargs)
             raise
-    
+
     async def _get_openai_response(self, messages: List[Dict], model: str, **kwargs) -> str:
         """Get response from OpenAI API"""
         model_name = "gpt-3.5-turbo" if "3.5" in model else "gpt-4"
-        
+
         headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json"
         }
-        
+
         data = {
             "model": model_name,
             "messages": messages,
             "max_tokens": kwargs.get('max_tokens', 1000),
             "temperature": kwargs.get('temperature', 0.7)
         }
-        
+
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -538,30 +537,30 @@ class AIModelManager:
                 json=data,
                 timeout=30
             )
-            
+
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail="OpenAI API error")
-            
+
             result = response.json()
             return result["choices"][0]["message"]["content"]
-    
+
     def get_available_models(self, subscription_tier: str = 'free') -> Dict:
         """Get available models based on subscription"""
         available = {}
         for model_id, model_info in self.models.items():
             if not model_info['available']:
                 continue
-            
+
             # Free users only get ollama
             if subscription_tier == 'free' and model_id != 'ollama':
                 continue
-            
+
             # Premium users get all except GPT-4
             if subscription_tier == 'premium' and model_id == 'openai-gpt-4':
                 continue
-            
+
             available[model_id] = model_info
-        
+
         return available
 
 ai_models = AIModelManager()
@@ -572,20 +571,20 @@ ai_models = AIModelManager()
 class ChatSearchEngine:
     def __init__(self):
         self.stop_words = {'der', 'die', 'und', 'in', 'den', 'von', 'zu', 'das', 'mit', 'sich', 'des', 'auf', 'für', 'ist', 'im', 'dem', 'nicht', 'ein', 'eine', 'als', 'auch', 'es', 'an', 'werden', 'aus', 'er', 'hat', 'dass', 'sie', 'nach', 'wird', 'bei', 'einer', 'um', 'am', 'sind', 'noch', 'wie', 'einem', 'über', 'einen', 'so', 'zum', 'war', 'haben', 'nur', 'oder', 'aber', 'vor', 'zur', 'bis', 'mehr', 'durch', 'man', 'sein', 'wurde', 'sei', 'seit'}
-    
+
     def search_messages(self, username: str, query: str, limit: int = 50) -> List[Dict]:
         """Search through user's chat history"""
         query_terms = self._process_query(query)
         if not query_terms:
             return []
-        
+
         with DatabaseConnection(db_pool) as conn:
             cursor = conn.cursor()
-            
+
             # Build search query
             placeholders = ' OR '.join(['content LIKE ?' for _ in query_terms])
             like_terms = [f'%{term}%' for term in query_terms]
-            
+
             cursor.execute(f"""
                 SELECT role, content, timestamp, 
                        CASE 
@@ -597,7 +596,7 @@ class ChatSearchEngine:
                 ORDER BY relevance DESC, timestamp DESC
                 LIMIT ?
             """, [username] + like_terms + like_terms + [limit])
-            
+
             results = []
             for row in cursor.fetchall():
                 results.append({
@@ -607,47 +606,47 @@ class ChatSearchEngine:
                     'relevance': row['relevance'],
                     'snippet': self._create_snippet(row['content'], query_terms)
                 })
-            
+
             return results
-    
+
     def _process_query(self, query: str) -> List[str]:
         """Process search query into terms"""
         # Remove special characters and convert to lowercase
         query = re.sub(r'[^\w\s]', ' ', query.lower())
         terms = query.split()
-        
+
         # Remove stop words and short terms
         terms = [term for term in terms if term not in self.stop_words and len(term) > 2]
-        
+
         return terms[:10]  # Limit to 10 terms
-    
+
     def _create_snippet(self, content: str, query_terms: List[str]) -> str:
         """Create a snippet highlighting query terms"""
         content_lower = content.lower()
-        
+
         # Find first occurrence of any query term
         first_pos = len(content)
         for term in query_terms:
             pos = content_lower.find(term)
             if pos != -1 and pos < first_pos:
                 first_pos = pos
-        
+
         # Create snippet around first occurrence
         start = max(0, first_pos - 50)
         end = min(len(content), first_pos + 150)
         snippet = content[start:end]
-        
+
         # Add ellipsis if truncated
         if start > 0:
             snippet = "..." + snippet
         if end < len(content):
             snippet = snippet + "..."
-        
+
         # Highlight query terms
         for term in query_terms:
             pattern = re.compile(re.escape(term), re.IGNORECASE)
             snippet = pattern.sub(f'<mark>{term}</mark>', snippet)
-        
+
         return snippet
 
 search_engine = ChatSearchEngine()
@@ -659,7 +658,7 @@ def init_conversations_db():
     """Initialize conversation threading database"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
@@ -672,11 +671,11 @@ def init_conversations_db():
                 FOREIGN KEY (username) REFERENCES users (username)
             )
         """)
-        
+
         # Add conversation_id to chat_history if not exists
         cursor.execute("PRAGMA table_info(chat_history)")
         columns = [column[1] for column in cursor.fetchall()]
-        
+
         if 'conversation_id' not in columns:
             cursor.execute("ALTER TABLE chat_history ADD COLUMN conversation_id TEXT")
             # Create default conversation for existing messages
@@ -695,14 +694,14 @@ def create_conversation(username: str, title: str = None) -> str:
     """Create a new conversation thread"""
     conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
     title = title or f"Unterhaltung {datetime.now().strftime('%d.%m. %H:%M')}"
-    
+
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO conversations (id, username, title)
             VALUES (?, ?, ?)
         """, (conversation_id, username, title))
-    
+
     return conversation_id
 
 def get_user_conversations(username: str) -> List[Dict]:
@@ -715,25 +714,27 @@ def get_user_conversations(username: str) -> List[Dict]:
             WHERE username = ? AND is_archived = 0
             ORDER BY last_activity DESC
         """, (username,))
-        
+
         return [dict(row) for row in cursor.fetchall()]
 
 # ──────────────────────────────
-# Performance Monitoring Middleware
+# Performance Monitoring Middleware (FIXED)
 # ──────────────────────────────
 class PerformanceMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time_now()
-        
-        # Get user for metrics
+
+        # Session NUR nutzen, wenn sie bereits im Scope liegt
         user = None
-        if hasattr(request, 'session') and 'username' in request.session:
-            user = request.session['username']
-        
+        if "session" in request.scope:
+            try:
+                user = request.session.get("username")
+            except Exception:
+                user = None
+
         response = await call_next(request)
-        
         duration = time_now() - start_time
-        
+
         # Record performance metric
         metric = PerformanceMetrics(
             endpoint=str(request.url.path),
@@ -743,26 +744,50 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
             timestamp=datetime.now().isoformat(),
             user=user
         )
-        
+
         # Log slow requests
         if duration > 1.0:
-            logger.warning("Slow request", 
-                          endpoint=metric.endpoint, 
-                          duration=duration,
-                          user=user)
-        
+            logger.warning(
+                "Slow request",
+                endpoint=metric.endpoint,
+                duration=duration,
+                user=user
+            )
+
         performance_monitor.record_metric(metric)
-        
+
         # Add performance headers
         response.headers["X-Response-Time"] = f"{duration:.3f}"
-        
         return response
 
+# Reihenfolge wichtig: zuletzt hinzugefügt = läuft zuerst
 app.add_middleware(PerformanceMiddleware)
+
+# SessionMiddleware kommt zuletzt → läuft als erstes
+SESSION_SECRET = os.getenv("SESSION_SECRET") or SECRET_KEY or "DEV-CHANGE-ME"
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    same_site="lax",    # Browser-kompatibel
+    https_only=True,    # auf Render sinnvoll
+)
+
+# ──────────────────────────────
+# Health-Check/Root Endpoints (HEAD/GET)
+# ──────────────────────────────
+@app.head("/")
+async def root_head():
+    # einfacher 200er für Health-Checks (z. B. Render)
+    return Response(status_code=200)
+
+@app.get("/")
+async def root_get():
+    return {"status": "ok"}
 
 # ──────────────────────────────
 # Subscription System
 # ──────────────────────────────
+
 class SubscriptionTier(Enum):
     FREE = "free"
     PREMIUM = "premium"
