@@ -28,6 +28,7 @@ import queue
 from datetime import datetime, timedelta
 from time import time as time_now
 from collections import defaultdict, OrderedDict
+# Optional imports with fallbacks
 try:
     import psutil
     PSUTIL_AVAILABLE = True
@@ -41,18 +42,33 @@ try:
 except ImportError:
     MAGIC_AVAILABLE = False
     magic = None
+
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    Image = None
+
 try:
     import PyPDF2
-    PyPDF2_AVAILABLE = True
+    PDF_AVAILABLE = True
 except ImportError:
-    PyPDF2_AVAILABLE = False
+    PDF_AVAILABLE = False
     PyPDF2 = None
+
 try:
     import docx
-    docx_AVAILABLE = True
+    DOCX_AVAILABLE = True
 except ImportError:
-    docx_AVAILABLE = False
-    docx = None    
+    DOCX_AVAILABLE = False
+    docx = None
+
+from concurrent.futures import ThreadPoolExecutor
+import aiofiles
+import httpx
+
+from ollama_chat import get_response, get_response_with_messages  
 from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
