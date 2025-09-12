@@ -28,7 +28,6 @@ import queue
 from datetime import datetime, timedelta
 from time import time as time_now
 from collections import defaultdict, OrderedDict
-
 # Optional imports with fallbacks
 try:
     import psutil
@@ -69,6 +68,11 @@ from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
 
+from ollama_chat import get_response, get_response_with_messages  
+from concurrent.futures import ThreadPoolExecutor
+import aiofiles
+import httpx
+
 from ollama_chat import get_response, get_response_with_messages
 
 # ──────────────────────────────
@@ -84,8 +88,6 @@ REDIS_URL = os.getenv("REDIS_URL", None)
 # Ensure directories exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs("logs", exist_ok=True)
-os.makedirs("static", exist_ok=True)
-os.makedirs("templates", exist_ok=True)
 
 app = FastAPI(title="KI-Chat Advanced", version="2.0.0")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
@@ -108,7 +110,7 @@ def setup_structured_logging():
             structlog.processors.add_log_level,
             structlog.processors.JSONRenderer()
         ],
-        wrapper_class=structlog.stdlib.BoundLogger,
+        wrapper_class=structlog.stdlib.LoggerFactory(),
         logger_factory=structlog.stdlib.LoggerFactory(),
         context_class=dict,
         cache_logger_on_first_use=True,
@@ -147,6 +149,7 @@ CHAT_TABLE_CREATED = False
 MESSAGES_PER_HOUR = 50
 SESSION_TIMEOUT_MINUTES = 30
 SESSION_TIMEOUT_SECONDS = SESSION_TIMEOUT_MINUTES * 60
+
 # ──────────────────────────────
 # Performance Monitoring
 # ──────────────────────────────
@@ -182,9 +185,9 @@ class PerformanceMonitor:
             durations = [m.duration for m in self.metrics]
             return {
                 "total_requests": len(self.metrics),
-                "avg_response_time": sum(durations) / len(durations) if durations else 0.0,
-                "max_response_time": max(durations) if durations else 0.0,
-                "min_response_time": min(durations) if durations else 0.0,
+                "avg_response_time": sum(durations) / len(durations),
+                "max_response_time": max(durations),
+                "min_response_time": min(durations),
                 "endpoints": self._get_endpoint_stats(),
                 "last_updated": datetime.now().isoformat()
             }
@@ -197,8 +200,8 @@ class PerformanceMonitor:
         return {
             endpoint: {
                 "count": len(durations),
-                "avg_time": sum(durations) / len(durations) if durations else 0.0,
-                "max_time": max(durations) if durations else 0.0
+                "avg_time": sum(durations) / len(durations),
+                "max_time": max(durations)
             } for endpoint, durations in endpoint_stats.items()
         }
 
@@ -224,9 +227,9 @@ class MemoryCache:
                 return None
             
             # Check TTL
-            if time_now() - self.timestamps.get(key, 0) > self.ttl:
-                self.cache.pop(key, None)
-                self.timestamps.pop(key, None)
+            if time_now() - self.timestamps[key] > self.ttl:
+                del self.cache[key]
+                del self.timestamps[key]
                 self.misses += 1
                 return None
             
@@ -239,8 +242,10 @@ class MemoryCache:
         with self.lock:
             if key in self.cache:
                 del self.cache[key]
+            
             self.cache[key] = value
             self.timestamps[key] = time_now()
+            
             # Remove oldest if over limit
             while len(self.cache) > self.max_size:
                 oldest_key = next(iter(self.cache))
@@ -259,13 +264,12 @@ class MemoryCache:
             self.timestamps.clear()
     
     def stats(self):
-        total = self.hits + self.misses
         return {
             "size": len(self.cache),
             "max_size": self.max_size,
             "hits": self.hits,
             "misses": self.misses,
-            "hit_rate": self.hits / total if total else 0
+            "hit_rate": self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0
         }
 
 cache = MemoryCache()
@@ -302,10 +306,7 @@ class DatabasePool:
     def return_connection(self, conn: sqlite3.Connection):
         try:
             # Reset connection state
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            conn.rollback()
             self.pool.put_nowait(conn)
         except queue.Full:
             # Pool full, close connection
@@ -388,13 +389,10 @@ class FileProcessor:
         
         # Detect file type (fallback if magic is not available)
         if MAGIC_AVAILABLE:
-            try:
-                mime_type = magic.from_buffer(content, mime=True)
-            except Exception:
-                mime_type = 'application/octet-stream'
+            mime_type = magic.from_buffer(content, mime=True)
         else:
             # Simple fallback based on file extension
-            filename = (file.filename or "").lower()
+            filename = file.filename.lower()
             if filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
                 mime_type = 'image/jpeg'
             elif filename.endswith('.pdf'):
@@ -424,7 +422,7 @@ class FileProcessor:
                 result['type'] = 'document'
             
             elif mime_type in FileProcessor.ALLOWED_TYPES['text']:
-                result['content'] = content.decode('utf-8', errors='replace')
+                result['content'] = content.decode('utf-8')
                 result['type'] = 'text'
             
             else:
@@ -438,8 +436,6 @@ class FileProcessor:
     @staticmethod
     async def _process_image(content: bytes) -> str:
         """Process image file"""
-        if not PIL_AVAILABLE:
-            return "Bildverarbeitung nicht verfügbar (Pillow ist nicht installiert)."
         try:
             with Image.open(io.BytesIO(content)) as img:
                 return f"Bild analysiert: {img.format} Format, Größe: {img.size[0]}x{img.size[1]} Pixel. Bereit für KI-Analyse."
@@ -451,20 +447,15 @@ class FileProcessor:
         """Extract text from document files"""
         try:
             if mime_type == 'application/pdf':
-                if not PDF_AVAILABLE:
-                    return "PDF-Verarbeitung nicht verfügbar (PyPDF2 nicht installiert)."
+                # PDF processing
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
                 text = ""
                 for page in pdf_reader.pages:
-                    try:
-                        text += (page.extract_text() or "") + "\n"
-                    except Exception:
-                        continue
+                    text += page.extract_text() + "\n"
                 return text
             
             elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-                if not DOCX_AVAILABLE:
-                    return "DOCX-Verarbeitung nicht verfügbar (python-docx nicht installiert)."
+                # DOCX processing
                 doc = docx.Document(io.BytesIO(content))
                 text = ""
                 for paragraph in doc.paragraphs:
@@ -472,12 +463,11 @@ class FileProcessor:
                 return text
             
             elif mime_type == 'text/plain':
-                return content.decode('utf-8', errors='replace')
+                return content.decode('utf-8')
             
-            else:
-                return "Dokumententyp wird nicht unterstützt."
         except Exception as e:
             return f"Fehler beim Verarbeiten des Dokuments: {str(e)}"
+
 # ──────────────────────────────
 # Multiple AI Models Support
 # ──────────────────────────────
@@ -733,22 +723,18 @@ def get_user_conversations(username: str) -> List[Dict]:
         return [dict(row) for row in cursor.fetchall()]
 
 # ──────────────────────────────
-# Performance Monitoring Middleware (FIX)
+# Performance Monitoring Middleware
 # ──────────────────────────────
 class PerformanceMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time_now()
         
-        # WICHTIG: Erst Pipeline laufen lassen, dann Session lesen!
-        response = await call_next(request)
-        
-        # Session sicher abfragen
+        # Get user for metrics
         user = None
-        if "session" in request.scope:
-            try:
-                user = request.session.get("username")
-            except Exception:
-                user = None
+        if hasattr(request, 'session') and 'username' in request.session:
+            user = request.session['username']
+        
+        response = await call_next(request)
         
         duration = time_now() - start_time
         
@@ -1107,7 +1093,7 @@ def get_user_history(username: str, conversation_id: str = None) -> list:
         rows = cursor.fetchall()
     
     history = [{"role": row[0], "content": row[1], "timestamp": row[2]} for row in rows]
-    cache.set(cache_key, history)  # FIX: kein drittes Argument
+    cache.set(cache_key, history, 300)  # Cache for 5 minutes
     return history
 
 def save_user_history(username: str, role: str, content: str, conversation_id: str = None):
@@ -1296,6 +1282,7 @@ def update_api_key_usage(api_key: str):
                 last_used = datetime('now')
             WHERE api_key = ?
         """, (api_key,))
+
 # ──────────────────────────────
 # Analytics System
 # ──────────────────────────────
@@ -1370,7 +1357,7 @@ def _track_user_action_async(username: str, action: str, details: dict = None):
             analytics["daily"][today]["personas_used"][persona] = analytics["daily"][today]["personas_used"].get(persona, 0) + 1
     
     elif action == "feature_used":
-        feature = details.get("feature", "unknown") if details else "unknown"
+        feature = details.get("feature", "unknown")
         analytics["daily"][today]["features_used"][feature] = analytics["daily"][today]["features_used"].get(feature, 0) + 1
         if feature not in analytics["users"][username]["features_used"]:
             analytics["users"][username]["features_used"].append(feature)
@@ -1611,16 +1598,13 @@ async def health_check():
         health_data["checks"]["ai_model"] = f"unhealthy: {str(e)}"
         health_data["status"] = "degraded"
     
-    # Memory usage (psutil guard)
-    if PSUTIL_AVAILABLE:
-        process = psutil.Process()
-        health_data["system"] = {
-            "memory_usage_mb": round(process.memory_info().rss / 1024 / 1024, 2),
-            "cpu_percent": process.cpu_percent(interval=0.1),
-            "open_files": len(process.open_files())
-        }
-    else:
-        health_data["system"] = {"note": "psutil not installed"}
+    # Memory usage
+    process = psutil.Process()
+    health_data["system"] = {
+        "memory_usage_mb": round(process.memory_info().rss / 1024 / 1024, 2),
+        "cpu_percent": process.cpu_percent(),
+        "open_files": len(process.open_files())
+    }
     
     # Cache statistics
     health_data["cache"] = cache.stats()
@@ -1665,171 +1649,3 @@ async def login(request: Request, username: str = Form(...), password: str = For
         "request": request, 
         "error": "Falsche Anmeldedaten"
     })
-# ──────────────────────────────
-# Routes - Admin
-# ──────────────────────────────
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard(request: Request):
-    guard = _require_admin(request)
-    if guard:
-        return guard
-
-    users = get_all_users()
-    csrf_token = request.session.get("csrf_token", "")
-
-    tpl_path = os.path.join("templates", "admin.html")
-    if os.path.exists(tpl_path):
-        return templates.TemplateResponse("admin.html", {
-            "request": request,
-            "users": users,
-            "csrf_token": csrf_token
-        })
-
-    # Fallback-HTML (falls kein Template vorhanden)
-    rows = []
-    for uname, info in users.items():
-        rows.append(f"""
-        <tr>
-          <td>{html.escape(uname)}</td>
-          <td>{'✅' if info.get('is_admin', False) else '—'}</td>
-          <td>{'🚫 gesperrt' if info.get('blocked') else 'ok'}</td>
-          <td>{html.escape(info.get('subscription','free'))}</td>
-          <td style="display:flex;gap:8px;">
-            <form method="post" action="/admin/users/toggle-block" style="display:inline;">
-              <input type="hidden" name="csrf_token" value="{csrf_token}">
-              <input type="hidden" name="username" value="{html.escape(uname)}">
-              <button type="submit">{'Entsperren' if info.get('blocked') else 'Sperren'}</button>
-            </form>
-            <form method="post" action="/admin/users/delete" style="display:inline;" onsubmit="return confirm('User wirklich löschen?')">
-              <input type="hidden" name="csrf_token" value="{csrf_token}">
-              <input type="hidden" name="username" value="{html.escape(uname)}">
-              <button type="submit">Löschen</button>
-            </form>
-            <a href="/admin/export/{html.escape(uname)}">Export</a>
-          </td>
-        </tr>
-        """)
-
-    html_page = f"""
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Admin Dashboard</title>
-        <style>
-          body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }}
-          table {{ border-collapse: collapse; width: 100%; }}
-          th, td {{ border: 1px solid #ddd; padding: 8px; }}
-          th {{ background: #f5f5f5; text-align: left; }}
-          form {{ display: inline; }}
-          button {{ cursor: pointer; }}
-        </style>
-      </head>
-      <body>
-        <h1>Admin Dashboard</h1>
-        <table>
-          <thead>
-            <tr>
-              <th>Benutzername</th>
-              <th>Admin</th>
-              <th>Status</th>
-              <th>Subscription</th>
-              <th>Aktionen</th>
-            </tr>
-          </thead>
-          <tbody>
-            {''.join(rows)}
-          </tbody>
-        </table>
-        <p style="margin-top:16px;">
-          <a href="/chat">Zum Chat</a> · <a href="/logout">Logout</a>
-        </p>
-      </body>
-    </html>
-    """
-    return HTMLResponse(content=html_page, status_code=200)
-@app.post("/admin/users/toggle-block")
-async def admin_toggle_block(request: Request, username: str = Form(...), csrf_token: str = Form(...)):
-    guard = _require_admin(request)
-    if guard:
-        return guard
-
-    if not verify_csrf_token(csrf_token, request.session.get("csrf_token", "")):
-        raise HTTPException(status_code=403, detail="Ungültiges CSRF-Token")
-
-    if username == "admin":
-        raise HTTPException(status_code=400, detail="Admin-Account kann nicht gesperrt werden")
-
-    toggle_user_block(username)
-    return RedirectResponse("/admin", status_code=302)
-
-
-@app.post("/admin/users/delete")
-async def admin_delete_user(request: Request, username: str = Form(...), csrf_token: str = Form(...)):
-    guard = _require_admin(request)
-    if guard:
-        return guard
-
-    if not verify_csrf_token(csrf_token, request.session.get("csrf_token", "")):
-        raise HTTPException(status_code=403, detail="Ungültiges CSRF-Token")
-
-    if username == "admin":
-        raise HTTPException(status_code=400, detail="Admin-Account kann nicht gelöscht werden")
-
-    delete_user_completely(username)
-    return RedirectResponse("/admin", status_code=302)
-
-
-@app.get("/admin/export/{username}")
-async def admin_export_user(request: Request, username: str):
-    guard = _require_admin(request)
-    if guard:
-        return guard
-
-    data = create_user_export_package(username)
-    fname = f"{username}_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-    return Response(
-        content=data,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'}
-    )
-
-
-@app.post("/admin/users/delete")
-async def admin_delete_user(request: Request, username: str = Form(...), csrf_token: str = Form(...)):
-    guard = _require_admin(request)
-    if guard:
-        return guard
-
-    if not verify_csrf_token(csrf_token, request.session.get("csrf_token", "")):
-        raise HTTPException(status_code=403, detail="Ungültiges CSRF-Token")
-
-    if username == "admin":
-        raise HTTPException(status_code=400, detail="Admin-Account kann nicht gelöscht werden")
-
-    delete_user_completely(username)
-    return RedirectResponse("/admin", status_code=302)
-
-@app.get("/admin/export/{username}")
-async def admin_export_user(request: Request, username: str):
-    guard = _require_admin(request)
-    if guard:
-        return guard
-
-    # Erstelle ZIP mit allen Userdaten
-    data = create_user_export_package(username)
-    fname = f"{username}_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-    return Response(
-        content=data,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{fname}"'
-        }
-    )
-
-
-# ──────────────────────────────
-# Startup: init DBs (CRITICAL)
-# ──────────────────────────────
-# Wichtig: erst NACH Definition von DatabaseConnection und Funktionen aufrufen
-init_db()
-init_conversations_db()
