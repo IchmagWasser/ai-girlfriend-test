@@ -28,6 +28,7 @@ import queue
 from datetime import datetime, timedelta
 from time import time as time_now
 from collections import defaultdict, OrderedDict
+
 # Optional imports with fallbacks
 try:
     import psutil
@@ -68,11 +69,6 @@ from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
 
-from ollama_chat import get_response, get_response_with_messages  
-from concurrent.futures import ThreadPoolExecutor
-import aiofiles
-import httpx
-
 from ollama_chat import get_response, get_response_with_messages
 
 # ──────────────────────────────
@@ -85,12 +81,14 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", "10485760"))  # 10MB
 REDIS_URL = os.getenv("REDIS_URL", None)
 
-# Ensure directories exist
+# Ensure directories exist (CRITICAL for Render)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs("logs", exist_ok=True)
+os.makedirs("static", exist_ok=True)
+os.makedirs("templates", exist_ok=True)
 
 app = FastAPI(title="KI-Chat Advanced", version="2.0.0")
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)  # SessionMiddleware ist installiert
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
@@ -110,7 +108,7 @@ def setup_structured_logging():
             structlog.processors.add_log_level,
             structlog.processors.JSONRenderer()
         ],
-        wrapper_class=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,  # FIX: vorher LoggerFactory (falsch)
         logger_factory=structlog.stdlib.LoggerFactory(),
         context_class=dict,
         cache_logger_on_first_use=True,
@@ -173,7 +171,6 @@ class PerformanceMonitor:
     def record_metric(self, metric: PerformanceMetrics):
         with self.lock:
             self.metrics.append(metric)
-            # Keep only last 1000 metrics
             if len(self.metrics) > 1000:
                 self.metrics = self.metrics[-1000:]
     
@@ -181,7 +178,6 @@ class PerformanceMonitor:
         with self.lock:
             if not self.metrics:
                 return {}
-            
             durations = [m.duration for m in self.metrics]
             return {
                 "total_requests": len(self.metrics),
@@ -196,7 +192,6 @@ class PerformanceMonitor:
         endpoint_stats = defaultdict(list)
         for metric in self.metrics:
             endpoint_stats[metric.endpoint].append(metric.duration)
-        
         return {
             endpoint: {
                 "count": len(durations),
@@ -225,15 +220,11 @@ class MemoryCache:
             if key not in self.cache:
                 self.misses += 1
                 return None
-            
-            # Check TTL
             if time_now() - self.timestamps[key] > self.ttl:
                 del self.cache[key]
                 del self.timestamps[key]
                 self.misses += 1
                 return None
-            
-            # Move to end (LRU)
             self.cache.move_to_end(key)
             self.hits += 1
             return self.cache[key]
@@ -242,11 +233,8 @@ class MemoryCache:
         with self.lock:
             if key in self.cache:
                 del self.cache[key]
-            
             self.cache[key] = value
             self.timestamps[key] = time_now()
-            
-            # Remove oldest if over limit
             while len(self.cache) > self.max_size:
                 oldest_key = next(iter(self.cache))
                 del self.cache[oldest_key]
@@ -285,7 +273,6 @@ class DatabasePool:
         self.lock = threading.Lock()
         self.active_connections = 0
         
-        # Initialize pool
         for _ in range(pool_size):
             conn = sqlite3.connect(database_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
@@ -296,7 +283,6 @@ class DatabasePool:
             conn = self.pool.get_nowait()
             return conn
         except queue.Empty:
-            # Pool exhausted, create temporary connection
             with self.lock:
                 self.active_connections += 1
             conn = sqlite3.connect(self.database_path, check_same_thread=False)
@@ -305,11 +291,9 @@ class DatabasePool:
     
     def return_connection(self, conn: sqlite3.Connection):
         try:
-            # Reset connection state
             conn.rollback()
             self.pool.put_nowait(conn)
         except queue.Full:
-            # Pool full, close connection
             conn.close()
             with self.lock:
                 self.active_connections -= 1
@@ -320,24 +304,6 @@ class DatabasePool:
             conn.close()
 
 db_pool = DatabasePool(DB_PATH)
-
-# Context manager for database connections
-class DatabaseConnection:
-    def __init__(self, pool: DatabasePool):
-        self.pool = pool
-        self.conn = None
-    
-    def __enter__(self) -> sqlite3.Connection:
-        self.conn = self.pool.get_connection()
-        return self.conn
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.conn:
-            if exc_type:
-                self.conn.rollback()
-            else:
-                self.conn.commit()
-            self.pool.return_connection(self.conn)
 
 # ──────────────────────────────
 # Background Task System
@@ -351,11 +317,9 @@ class BackgroundTaskManager:
         self.worker_thread.start()
     
     def add_task(self, func, *args, **kwargs):
-        """Add a task to the background queue"""
         self.task_queue.put((func, args, kwargs))
     
     def _worker(self):
-        """Background worker thread"""
         while self.running:
             try:
                 func, args, kwargs = self.task_queue.get(timeout=1)
@@ -384,14 +348,12 @@ class FileProcessor:
     
     @staticmethod
     async def process_file(file: UploadFile) -> Dict[str, Any]:
-        """Process uploaded file and extract content"""
         content = await file.read()
         
         # Detect file type (fallback if magic is not available)
         if MAGIC_AVAILABLE:
             mime_type = magic.from_buffer(content, mime=True)
         else:
-            # Simple fallback based on file extension
             filename = file.filename.lower()
             if filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
                 mime_type = 'image/jpeg'
@@ -416,18 +378,14 @@ class FileProcessor:
             if mime_type in FileProcessor.ALLOWED_TYPES['image']:
                 result['content'] = await FileProcessor._process_image(content)
                 result['type'] = 'image'
-            
             elif mime_type in FileProcessor.ALLOWED_TYPES['document']:
                 result['content'] = await FileProcessor._process_document(content, mime_type)
                 result['type'] = 'document'
-            
             elif mime_type in FileProcessor.ALLOWED_TYPES['text']:
                 result['content'] = content.decode('utf-8')
                 result['type'] = 'text'
-            
             else:
                 raise ValueError(f"Unsupported file type: {mime_type}")
-        
         except Exception as e:
             result['error'] = str(e)
         
@@ -435,7 +393,9 @@ class FileProcessor:
     
     @staticmethod
     async def _process_image(content: bytes) -> str:
-        """Process image file"""
+        """Process image file with Pillow guard"""
+        if not PIL_AVAILABLE:
+            return "Bildverarbeitung nicht verfügbar (Pillow ist nicht installiert)."
         try:
             with Image.open(io.BytesIO(content)) as img:
                 return f"Bild analysiert: {img.format} Format, Größe: {img.size[0]}x{img.size[1]} Pixel. Bereit für KI-Analyse."
@@ -444,27 +404,25 @@ class FileProcessor:
     
     @staticmethod
     async def _process_document(content: bytes, mime_type: str) -> str:
-        """Extract text from document files"""
         try:
             if mime_type == 'application/pdf':
-                # PDF processing
+                if not PDF_AVAILABLE:
+                    return "PDF-Verarbeitung nicht verfügbar (PyPDF2 nicht installiert)."
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
                 text = ""
                 for page in pdf_reader.pages:
                     text += page.extract_text() + "\n"
                 return text
-            
             elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-                # DOCX processing
+                if not DOCX_AVAILABLE:
+                    return "DOCX-Verarbeitung nicht verfügbar (python-docx nicht installiert)."
                 doc = docx.Document(io.BytesIO(content))
                 text = ""
                 for paragraph in doc.paragraphs:
                     text += paragraph.text + "\n"
                 return text
-            
             elif mime_type == 'text/plain':
                 return content.decode('utf-8')
-            
         except Exception as e:
             return f"Fehler beim Verarbeiten des Dokuments: {str(e)}"
 
@@ -498,43 +456,30 @@ class AIModelManager:
         }
     
     async def get_response(self, messages: List[Dict], model: str = 'ollama', **kwargs) -> str:
-        """Get response from specified AI model"""
         if model not in self.models or not self.models[model]['available']:
-            model = 'ollama'  # Fallback
-        
+            model = 'ollama'
         try:
             if model == 'ollama':
                 return get_response_with_messages(messages)
-            
             elif model.startswith('openai'):
                 return await self._get_openai_response(messages, model, **kwargs)
-            
             else:
                 raise ValueError(f"Unknown model: {model}")
-        
         except Exception as e:
             logger.error("AI model error", model=model, error=str(e))
-            # Fallback to ollama
             if model != 'ollama':
                 return await self.get_response(messages, 'ollama', **kwargs)
             raise
     
     async def _get_openai_response(self, messages: List[Dict], model: str, **kwargs) -> str:
-        """Get response from OpenAI API"""
         model_name = "gpt-3.5-turbo" if "3.5" in model else "gpt-4"
-        
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
         data = {
             "model": model_name,
             "messages": messages,
             "max_tokens": kwargs.get('max_tokens', 1000),
             "temperature": kwargs.get('temperature', 0.7)
         }
-        
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api.openai.com/v1/chat/completions",
@@ -542,30 +487,21 @@ class AIModelManager:
                 json=data,
                 timeout=30
             )
-            
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail="OpenAI API error")
-            
             result = response.json()
             return result["choices"][0]["message"]["content"]
     
     def get_available_models(self, subscription_tier: str = 'free') -> Dict:
-        """Get available models based on subscription"""
         available = {}
         for model_id, model_info in self.models.items():
             if not model_info['available']:
                 continue
-            
-            # Free users only get ollama
             if subscription_tier == 'free' and model_id != 'ollama':
                 continue
-            
-            # Premium users get all except GPT-4
             if subscription_tier == 'premium' and model_id == 'openai-gpt-4':
                 continue
-            
             available[model_id] = model_info
-        
         return available
 
 ai_models = AIModelManager()
@@ -575,21 +511,16 @@ ai_models = AIModelManager()
 # ──────────────────────────────
 class ChatSearchEngine:
     def __init__(self):
-        self.stop_words = {'der', 'die', 'und', 'in', 'den', 'von', 'zu', 'das', 'mit', 'sich', 'des', 'auf', 'für', 'ist', 'im', 'dem', 'nicht', 'ein', 'eine', 'als', 'auch', 'es', 'an', 'werden', 'aus', 'er', 'hat', 'dass', 'sie', 'nach', 'wird', 'bei', 'einer', 'um', 'am', 'sind', 'noch', 'wie', 'einem', 'über', 'einen', 'so', 'zum', 'war', 'haben', 'nur', 'oder', 'aber', 'vor', 'zur', 'bis', 'mehr', 'durch', 'man', 'sein', 'wurde', 'sei', 'seit'}
+        self.stop_words = {'der','die','und','in','den','von','zu','das','mit','sich','des','auf','für','ist','im','dem','nicht','ein','eine','als','auch','es','an','werden','aus','er','hat','dass','sie','nach','wird','bei','einer','um','am','sind','noch','wie','einem','über','einen','so','zum','war','haben','nur','oder','aber','vor','zur','bis','mehr','durch','man','sein','wurde','sei','seit'}
     
     def search_messages(self, username: str, query: str, limit: int = 50) -> List[Dict]:
-        """Search through user's chat history"""
         query_terms = self._process_query(query)
         if not query_terms:
             return []
-        
         with DatabaseConnection(db_pool) as conn:
             cursor = conn.cursor()
-            
-            # Build search query
             placeholders = ' OR '.join(['content LIKE ?' for _ in query_terms])
             like_terms = [f'%{term}%' for term in query_terms]
-            
             cursor.execute(f"""
                 SELECT role, content, timestamp, 
                        CASE 
@@ -601,7 +532,6 @@ class ChatSearchEngine:
                 ORDER BY relevance DESC, timestamp DESC
                 LIMIT ?
             """, [username] + like_terms + like_terms + [limit])
-            
             results = []
             for row in cursor.fetchall():
                 results.append({
@@ -611,47 +541,31 @@ class ChatSearchEngine:
                     'relevance': row['relevance'],
                     'snippet': self._create_snippet(row['content'], query_terms)
                 })
-            
             return results
     
     def _process_query(self, query: str) -> List[str]:
-        """Process search query into terms"""
-        # Remove special characters and convert to lowercase
         query = re.sub(r'[^\w\s]', ' ', query.lower())
         terms = query.split()
-        
-        # Remove stop words and short terms
         terms = [term for term in terms if term not in self.stop_words and len(term) > 2]
-        
-        return terms[:10]  # Limit to 10 terms
+        return terms[:10]
     
     def _create_snippet(self, content: str, query_terms: List[str]) -> str:
-        """Create a snippet highlighting query terms"""
         content_lower = content.lower()
-        
-        # Find first occurrence of any query term
         first_pos = len(content)
         for term in query_terms:
             pos = content_lower.find(term)
             if pos != -1 and pos < first_pos:
                 first_pos = pos
-        
-        # Create snippet around first occurrence
         start = max(0, first_pos - 50)
         end = min(len(content), first_pos + 150)
         snippet = content[start:end]
-        
-        # Add ellipsis if truncated
         if start > 0:
             snippet = "..." + snippet
         if end < len(content):
             snippet = snippet + "..."
-        
-        # Highlight query terms
         for term in query_terms:
             pattern = re.compile(re.escape(term), re.IGNORECASE)
             snippet = pattern.sub(f'<mark>{term}</mark>', snippet)
-        
         return snippet
 
 search_engine = ChatSearchEngine()
@@ -660,10 +574,8 @@ search_engine = ChatSearchEngine()
 # Conversation Threading System
 # ──────────────────────────────
 def init_conversations_db():
-    """Initialize conversation threading database"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
-        
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
@@ -676,41 +588,32 @@ def init_conversations_db():
                 FOREIGN KEY (username) REFERENCES users (username)
             )
         """)
-        
-        # Add conversation_id to chat_history if not exists
         cursor.execute("PRAGMA table_info(chat_history)")
         columns = [column[1] for column in cursor.fetchall()]
-        
         if 'conversation_id' not in columns:
             cursor.execute("ALTER TABLE chat_history ADD COLUMN conversation_id TEXT")
-            # Create default conversation for existing messages
             cursor.execute("""
                 INSERT OR IGNORE INTO conversations (id, username, title)
                 SELECT DISTINCT 'default_' || username, username, 'Hauptunterhaltung'
                 FROM chat_history
             """)
-            # Assign existing messages to default conversation
             cursor.execute("""
                 UPDATE chat_history SET conversation_id = 'default_' || username
                 WHERE conversation_id IS NULL
             """)
 
 def create_conversation(username: str, title: str = None) -> str:
-    """Create a new conversation thread"""
     conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
     title = title or f"Unterhaltung {datetime.now().strftime('%d.%m. %H:%M')}"
-    
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO conversations (id, username, title)
             VALUES (?, ?, ?)
         """, (conversation_id, username, title))
-    
     return conversation_id
 
 def get_user_conversations(username: str) -> List[Dict]:
-    """Get all conversations for a user"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -719,26 +622,28 @@ def get_user_conversations(username: str) -> List[Dict]:
             WHERE username = ? AND is_archived = 0
             ORDER BY last_activity DESC
         """, (username,))
-        
         return [dict(row) for row in cursor.fetchall()]
 
 # ──────────────────────────────
-# Performance Monitoring Middleware
+# Performance Monitoring Middleware  (FIXED)
 # ──────────────────────────────
 class PerformanceMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time_now()
-        
-        # Get user for metrics
-        user = None
-        if hasattr(request, 'session') and 'username' in request.session:
-            user = request.session['username']
-        
+
+        # Pipeline zuerst laufen lassen, damit SessionMiddleware aktiv ist
         response = await call_next(request)
-        
+
+        # Session jetzt sicher abfragen
+        user = None
+        if "session" in request.scope:
+            try:
+                user = request.session.get("username")
+            except Exception:
+                user = None
+
         duration = time_now() - start_time
-        
-        # Record performance metric
+
         metric = PerformanceMetrics(
             endpoint=str(request.url.path),
             method=request.method,
@@ -747,19 +652,12 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
             timestamp=datetime.now().isoformat(),
             user=user
         )
-        
-        # Log slow requests
+
         if duration > 1.0:
-            logger.warning("Slow request", 
-                          endpoint=metric.endpoint, 
-                          duration=duration,
-                          user=user)
-        
+            logger.warning("Slow request", endpoint=metric.endpoint, duration=duration, user=user)
+
         performance_monitor.record_metric(metric)
-        
-        # Add performance headers
         response.headers["X-Response-Time"] = f"{duration:.3f}"
-        
         return response
 
 app.add_middleware(PerformanceMiddleware)
@@ -836,11 +734,8 @@ SUBSCRIPTION_LIMITS = {
 def init_db():
     """Initialize database with all necessary tables"""
     global CHAT_TABLE_CREATED
-    
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
-        
-        # Users table (extended with subscription and theme)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
@@ -854,8 +749,6 @@ def init_db():
                 theme TEXT DEFAULT 'light'
             )
         """)
-        
-        # Chat history table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -867,8 +760,6 @@ def init_db():
                 FOREIGN KEY (username) REFERENCES users (username)
             )
         """)
-        
-        # API Keys table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS api_keys (
                 api_key TEXT PRIMARY KEY,
@@ -881,8 +772,6 @@ def init_db():
                 FOREIGN KEY (username) REFERENCES users (username)
             )
         """)
-        
-        # Sessions table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
@@ -893,8 +782,6 @@ def init_db():
                 expires_at DATETIME NOT NULL
             )
         """)
-        
-        # Admin user creation
         cursor.execute("SELECT username FROM users WHERE username = ?", ("admin",))
         if not cursor.fetchone():
             admin_hash = hash_password("admin")
@@ -903,48 +790,32 @@ def init_db():
                 VALUES (?, ?, ?, ?, 1, 'enterprise')
             """, ("admin", admin_hash, "Default Admin Question", "admin"))
             logger.info("[INIT] Admin user created (admin/admin)")
-    
     CHAT_TABLE_CREATED = True
     logger.info("[INIT] Database initialized")
 
 def hash_password(password: str) -> str:
-    """Hash password"""
     return hashlib.sha256(password.encode()).hexdigest()
 
 def generate_csrf_token() -> str:
-    """Generate CSRF token"""
     return secrets.token_urlsafe(32)
 
 def verify_csrf_token(token: str, session_token: str) -> bool:
-    """Verify CSRF token"""
     return hmac.compare_digest(token, session_token)
 
 def render_markdown_simple(text: str) -> str:
-    """Simple markdown rendering for chat messages"""
     text = html.escape(text)
-    
-    # Code blocks (```code```)
     text = re.sub(
         r'```(\w+)?\n?(.*?)```', 
         r'<div class="code-block"><div class="code-header">\1</div><pre><code>\2</code></pre></div>', 
         text, 
         flags=re.DOTALL
     )
-    
-    # Inline code (`code`)
     text = re.sub(r'`([^`]+)`', r'<code class="inline-code">\1</code>', text)
-    
-    # Bold (**text**)
     text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
-    
-    # Italic (*text*)
     text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
-    
-    # Lists (- item)
     lines = text.split('\n')
     in_list = False
     result_lines = []
-    
     for line in lines:
         if line.strip().startswith('- '):
             if not in_list:
@@ -956,36 +827,26 @@ def render_markdown_simple(text: str) -> str:
                 result_lines.append('</ul>')
                 in_list = False
             result_lines.append(line)
-    
     if in_list:
         result_lines.append('</ul>')
-    
     text = '\n'.join(result_lines)
-    
-    # Links [text](url)
     text = re.sub(
         r'\[([^\]]+)\]\(([^)]+)\)', 
         r'<a href="\2" target="_blank" class="chat-link">\1</a>', 
         text
     )
-    
-    # Line breaks
     text = text.replace('\n', '<br>')
-    
     return text
 
 def get_user(username: str) -> dict:
-    """Get user from database"""
     cache_key = f"user_{username}"
     cached_user = cache.get(cache_key)
     if cached_user:
         return cached_user
-    
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
         row = cursor.fetchone()
-    
     if row:
         user_data = {
             "username": row[0],
@@ -1000,16 +861,13 @@ def get_user(username: str) -> dict:
         }
         cache.set(cache_key, user_data)
         return user_data
-    
     return None
 
 def get_all_users() -> dict:
-    """Get all users for admin panel"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users")
         rows = cursor.fetchall()
-    
     users = {}
     for row in rows:
         users[row[0]] = {
@@ -1024,10 +882,8 @@ def get_all_users() -> dict:
     return users
 
 def save_user(username: str, password: str, question: str, answer: str) -> bool:
-    """Register new user"""
     if get_user(username):
         return False
-    
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         try:
@@ -1042,40 +898,32 @@ def save_user(username: str, password: str, question: str, answer: str) -> bool:
             return False
 
 def check_login(username: str, password: str) -> bool:
-    """Check login credentials"""
     user = get_user(username)
     if user:
         return user["password"] == hash_password(password)
     return False
 
 def verify_security_answer(username: str, answer: str) -> bool:
-    """Verify security answer"""
     user = get_user(username)
     if user:
         return user["answer"] == answer
     return False
 
 def reset_password(username: str, new_password: str):
-    """Reset password"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         password_hash = hash_password(new_password)
         cursor.execute("UPDATE users SET password = ? WHERE username = ?", 
                        (password_hash, username))
-    
-    # Clear user from cache
     cache.delete(f"user_{username}")
 
 def get_user_history(username: str, conversation_id: str = None) -> list:
-    """Get chat history from database"""
     if not CHAT_TABLE_CREATED:
         return []
-    
     cache_key = f"history_{username}_{conversation_id or 'default'}"
     cached_history = cache.get(cache_key)
     if cached_history:
         return cached_history
-    
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         if conversation_id:
@@ -1089,42 +937,31 @@ def get_user_history(username: str, conversation_id: str = None) -> list:
                 SELECT role, content, timestamp FROM chat_history 
                 WHERE username = ? ORDER BY timestamp ASC
             """, (username,))
-        
         rows = cursor.fetchall()
-    
     history = [{"role": row[0], "content": row[1], "timestamp": row[2]} for row in rows]
-    cache.set(cache_key, history, 300)  # Cache for 5 minutes
+    cache.set(cache_key, history)  # FIX: kein drittes Argument
     return history
 
 def save_user_history(username: str, role: str, content: str, conversation_id: str = None):
-    """Save chat message to database"""
     if not CHAT_TABLE_CREATED:
         return
-    
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO chat_history (username, role, content, conversation_id) 
             VALUES (?, ?, ?, ?)
         """, (username, role, content, conversation_id))
-    
-    # Clear cache
     cache.delete(f"history_{username}_{conversation_id or 'default'}")
 
 def delete_user_history(username: str):
-    """Delete chat history"""
     if not CHAT_TABLE_CREATED:
         return
-    
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
-    
-    # Clear cache
     cache.delete(f"history_{username}_default")
 
 def get_user_subscription(username: str) -> SubscriptionTier:
-    """Get user subscription status"""
     user = get_user(username)
     if user:
         subscription = user.get("subscription", "free")
@@ -1135,101 +972,66 @@ def get_user_subscription(username: str) -> SubscriptionTier:
     return SubscriptionTier.FREE
 
 def set_user_subscription(username: str, tier: SubscriptionTier):
-    """Set subscription tier for user"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET subscription = ? WHERE username = ?", (tier.value, username))
-    
     cache.delete(f"user_{username}")
 
 def get_user_theme(username: str) -> str:
-    """Get user theme preference"""
     user = get_user(username)
     return user.get("theme", "light") if user else "light"
 
 def set_user_theme(username: str, theme: str):
-    """Set user theme preference"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET theme = ? WHERE username = ?", (theme, username))
-    
     cache.delete(f"user_{username}")
 
 def get_user_persona(username: str) -> str:
-    """Get user's selected persona"""
     user = get_user(username)
     return user.get("persona", "standard") if user else "standard"
 
 def save_user_persona(username: str, persona: str):
-    """Save user's selected persona"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET persona = ? WHERE username = ?", (persona, username))
-    
     cache.delete(f"user_{username}")
 
 def check_feature_access(username: str, feature: str) -> bool:
-    """Check if user has access to feature"""
     tier = get_user_subscription(username)
     allowed_features = SUBSCRIPTION_LIMITS[tier]["features"]
-    
     return "all" in allowed_features or feature in allowed_features
 
 def check_daily_limit(username: str, limit_type: str) -> bool:
-    """Check daily limits (messages, API calls)"""
     tier = get_user_subscription(username)
     limit = SUBSCRIPTION_LIMITS[tier].get(f"{limit_type}_per_day", 0)
-    
-    if limit == -1:  # Unlimited
+    if limit == -1:
         return True
-    
-    # Check current usage
     analytics = load_analytics()
     today = datetime.now().strftime("%Y-%m-%d")
     user_data = analytics["users"].get(username, {})
-    
     current_usage = user_data.get(f"{limit_type}_today", 0)
     return current_usage < limit
 
 def get_available_personas(username: str) -> dict:
-    """Get available personas based on subscription"""
     tier = get_user_subscription(username)
     allowed_personas = SUBSCRIPTION_LIMITS[tier]["personas"]
-    
     return {key: value for key, value in PERSONAS.items() if key in allowed_personas}
 
 def get_response_with_context(current_message: str, chat_history: list, persona: str = "standard") -> str:
-    """Get AI response with chat context and persona"""
     messages = []
-    
-    # System prompt based on selected persona
     persona_config = PERSONAS.get(persona, PERSONAS["standard"])
-    messages.append({
-        "role": "system", 
-        "content": persona_config["system_prompt"]
-    })
-    
-    # Add chat history (last 20 messages for better context)
+    messages.append({"role": "system", "content": persona_config["system_prompt"]})
     for msg in chat_history[-20:]:
         if msg["role"] in ["user", "assistant"]:
-            messages.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
-    
-    # Add current message
-    messages.append({
-        "role": "user",
-        "content": current_message
-    })
-    
+            messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": current_message})
     return get_response_with_messages(messages)
 
 # ──────────────────────────────
 # API Key Management (Database)
 # ──────────────────────────────
 def save_api_key_to_db(api_key: str, username: str):
-    """Save API key to database"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -1238,7 +1040,6 @@ def save_api_key_to_db(api_key: str, username: str):
         """, (api_key, username))
 
 def get_api_key_from_db(api_key: str) -> Optional[dict]:
-    """Get API key info from database"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -1246,7 +1047,6 @@ def get_api_key_from_db(api_key: str) -> Optional[dict]:
             FROM api_keys 
             WHERE api_key = ? AND is_active = 1
         """, (api_key,))
-        
         row = cursor.fetchone()
         if row:
             return {
@@ -1259,7 +1059,6 @@ def get_api_key_from_db(api_key: str) -> Optional[dict]:
     return None
 
 def get_user_api_keys(username: str) -> List[dict]:
-    """Get all API keys for a user"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -1268,11 +1067,9 @@ def get_user_api_keys(username: str) -> List[dict]:
             WHERE username = ? AND is_active = 1
             ORDER BY created_at DESC
         """, (username,))
-        
         return [dict(row) for row in cursor.fetchall()]
 
 def update_api_key_usage(api_key: str):
-    """Update API key usage statistics"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("""
@@ -1287,7 +1084,6 @@ def update_api_key_usage(api_key: str):
 # Analytics System
 # ──────────────────────────────
 def load_analytics():
-    """Load analytics data"""
     if os.path.exists(ANALYTICS_FILE):
         try:
             with open(ANALYTICS_FILE, 'r') as f:
@@ -1297,20 +1093,15 @@ def load_analytics():
     return {"daily": {}, "users": {}, "features": {}, "api": {}}
 
 def save_analytics(data):
-    """Save analytics data"""
     with open(ANALYTICS_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
 def track_user_action(username: str, action: str, details: dict = None):
-    """Track user actions for analytics"""
     background_tasks.add_task(_track_user_action_async, username, action, details)
 
 def _track_user_action_async(username: str, action: str, details: dict = None):
-    """Async analytics tracking"""
     analytics = load_analytics()
     today = datetime.now().strftime("%Y-%m-%d")
-    
-    # Daily statistics
     if today not in analytics["daily"]:
         analytics["daily"][today] = {
             "total_messages": 0,
@@ -1318,8 +1109,6 @@ def _track_user_action_async(username: str, action: str, details: dict = None):
             "personas_used": {},
             "features_used": {}
         }
-    
-    # User-specific statistics
     if username not in analytics["users"]:
         analytics["users"][username] = {
             "first_seen": today,
@@ -1330,14 +1119,10 @@ def _track_user_action_async(username: str, action: str, details: dict = None):
             "favorite_persona": "standard",
             "features_used": []
         }
-    
-    # Reset daily counters if new day
     if analytics["users"][username].get("last_reset") != today:
         analytics["users"][username]["messages_today"] = 0
         analytics["users"][username]["api_calls_today"] = 0
         analytics["users"][username]["last_reset"] = today
-    
-    # Update data
     if action == "chat_message":
         analytics["daily"][today]["total_messages"] += 1
         if username not in analytics["daily"][today]["unique_users"]:
@@ -1345,30 +1130,25 @@ def _track_user_action_async(username: str, action: str, details: dict = None):
         analytics["users"][username]["total_messages"] += 1
         analytics["users"][username]["messages_today"] += 1
         analytics["users"][username]["last_seen"] = today
-        
         if details and "persona" in details:
             persona = details["persona"]
             analytics["daily"][today]["personas_used"][persona] = analytics["daily"][today]["personas_used"].get(persona, 0) + 1
-    
     elif action == "api_call":
         analytics["users"][username]["api_calls_today"] += 1
         if details and "persona" in details:
             persona = details["persona"]
             analytics["daily"][today]["personas_used"][persona] = analytics["daily"][today]["personas_used"].get(persona, 0) + 1
-    
     elif action == "feature_used":
-        feature = details.get("feature", "unknown")
+        feature = details.get("feature", "unknown") if details else "unknown"
         analytics["daily"][today]["features_used"][feature] = analytics["daily"][today]["features_used"].get(feature, 0) + 1
         if feature not in analytics["users"][username]["features_used"]:
             analytics["users"][username]["features_used"].append(feature)
-    
     save_analytics(analytics)
 
 # ──────────────────────────────
 # Rate Limiting & Session Management
 # ──────────────────────────────
 def load_rate_limits():
-    """Load rate limit data"""
     if os.path.exists(RATE_LIMIT_FILE):
         try:
             with open(RATE_LIMIT_FILE, 'r') as f:
@@ -1378,53 +1158,37 @@ def load_rate_limits():
     return {}
 
 def save_rate_limits(limits):
-    """Save rate limit data"""
     with open(RATE_LIMIT_FILE, 'w') as f:
         json.dump(limits, f)
 
 def check_rate_limit(username: str) -> bool:
-    """Check if user has reached rate limit"""
     limits = load_rate_limits()
     current_time = time_now()
-    
     user_data = limits.get(username, {"messages": [], "last_reset": current_time})
-    
-    # Remove messages older than 1 hour
     hour_ago = current_time - 3600
     user_data["messages"] = [msg_time for msg_time in user_data["messages"] if msg_time > hour_ago]
-    
-    # Check if limit reached
     if len(user_data["messages"]) >= MESSAGES_PER_HOUR:
         return False
-    
-    # Add new message
     user_data["messages"].append(current_time)
     limits[username] = user_data
     save_rate_limits(limits)
-    
     return True
 
 def update_session_activity(request: Request):
-    """Update last activity in session"""
     request.session["last_activity"] = time_now()
 
 def check_session_timeout(request: Request) -> bool:
-    """Check if session has timed out"""
     last_activity = request.session.get("last_activity")
     if not last_activity:
         return True
-    
     return (time_now() - last_activity) > SESSION_TIMEOUT_SECONDS
 
 def require_active_session(request: Request):
-    """Check for active session"""
     if not request.session.get("username"):
         return RedirectResponse("/", status_code=302)
-    
     if check_session_timeout(request):
         request.session.clear()
         return RedirectResponse("/?timeout=1", status_code=302)
-    
     update_session_activity(request)
     return None
 
@@ -1441,7 +1205,6 @@ def admin_redirect_guard(request: Request):
     return None
 
 def toggle_user_block(username: str):
-    """Toggle user block status"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT is_blocked FROM users WHERE username = ?", (username,))
@@ -1449,42 +1212,33 @@ def toggle_user_block(username: str):
         new_status = 0 if current else 1
         cursor.execute("UPDATE users SET is_blocked = ? WHERE username = ?", 
                        (new_status, username))
-    
     cache.delete(f"user_{username}")
 
 def delete_user_completely(username: str):
-    """Delete user and all data"""
     with DatabaseConnection(db_pool) as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM users WHERE username = ?", (username,))
         cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
         cursor.execute("DELETE FROM api_keys WHERE username = ?", (username,))
-    
     cache.delete(f"user_{username}")
 
 # ──────────────────────────────
 # Export Functions
 # ──────────────────────────────
 def export_user_chat_txt(username: str) -> str:
-    """Export chat history as text"""
     history = get_user_history(username)
     output = [f"Chat-Export für {username} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"]
     output.append("=" * 60 + "\n")
-    
     for msg in history:
         timestamp = msg.get('timestamp', '')
         role = msg.get('role', '').upper()
         content = msg.get('content', '')
-        
         output.append(f"[{timestamp}] {role}:\n{content}\n\n")
-    
     return '\n'.join(output)
 
 def export_user_chat_json(username: str) -> dict:
-    """Export chat history as JSON"""
     history = get_user_history(username)
     user = get_user(username)
-    
     return {
         "export_date": datetime.now().isoformat(),
         "username": username,
@@ -1497,19 +1251,12 @@ def export_user_chat_json(username: str) -> dict:
     }
 
 def create_user_export_package(username: str) -> bytes:
-    """Create ZIP package with all user data"""
     zip_buffer = io.BytesIO()
-    
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # Chat history as text
         txt_content = export_user_chat_txt(username)
         zip_file.writestr(f"{username}_chat.txt", txt_content.encode('utf-8'))
-        
-        # Chat history as JSON
         json_content = json.dumps(export_user_chat_json(username), indent=2, ensure_ascii=False)
         zip_file.writestr(f"{username}_data.json", json_content.encode('utf-8'))
-        
-        # User info
         user = get_user(username)
         user_info = {
             "username": username,
@@ -1519,7 +1266,6 @@ def create_user_export_package(username: str) -> bytes:
             "export_date": datetime.now().isoformat()
         }
         zip_file.writestr("user_info.json", json.dumps(user_info, indent=2).encode('utf-8'))
-    
     zip_buffer.seek(0)
     return zip_buffer.read()
 
@@ -1527,32 +1273,23 @@ def create_user_export_package(username: str) -> bytes:
 # Validation Helper
 # ──────────────────────────────
 def validate_password_strength(password: str) -> tuple[bool, str]:
-    """Validate password strength"""
     if len(password) < 8:
         return False, "Passwort muss mindestens 8 Zeichen haben"
-    
     if not any(c.isupper() for c in password):
         return False, "Passwort muss mindestens einen Großbuchstaben enthalten"
-    
     if not any(c.islower() for c in password):
         return False, "Passwort muss mindestens einen Kleinbuchstaben enthalten"
-    
     if not any(c.isdigit() for c in password):
         return False, "Passwort muss mindestens eine Zahl enthalten"
-    
     return True, "Passwort ist sicher"
 
 def validate_username(username: str) -> tuple[bool, str]:
-    """Validate username"""
     if len(username) < 3:
         return False, "Benutzername muss mindestens 3 Zeichen haben"
-    
     if len(username) > 20:
         return False, "Benutzername darf maximal 20 Zeichen haben"
-    
     if not username.replace('_', '').replace('-', '').isalnum():
         return False, "Benutzername darf nur Buchstaben, Zahlen, _ und - enthalten"
-    
     return True, "Benutzername ist gültig"
 
 # ──────────────────────────────
@@ -1560,15 +1297,12 @@ def validate_username(username: str) -> tuple[bool, str]:
 # ──────────────────────────────
 @app.get("/health")
 async def health_check():
-    """Comprehensive health check endpoint"""
     health_data = {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "2.0.0",
         "checks": {}
     }
-    
-    # Database check
     try:
         with DatabaseConnection(db_pool) as conn:
             cursor = conn.cursor()
@@ -1577,8 +1311,6 @@ async def health_check():
     except Exception as e:
         health_data["checks"]["database"] = f"unhealthy: {str(e)}"
         health_data["status"] = "degraded"
-    
-    # File system check
     try:
         test_file = os.path.join(UPLOAD_DIR, ".health_check")
         with open(test_file, "w") as f:
@@ -1588,8 +1320,6 @@ async def health_check():
     except Exception as e:
         health_data["checks"]["filesystem"] = f"unhealthy: {str(e)}"
         health_data["status"] = "degraded"
-    
-    # AI Model check
     try:
         test_messages = [{"role": "user", "content": "test"}]
         await ai_models.get_response(test_messages)
@@ -1597,21 +1327,20 @@ async def health_check():
     except Exception as e:
         health_data["checks"]["ai_model"] = f"unhealthy: {str(e)}"
         health_data["status"] = "degraded"
-    
-    # Memory usage
-    process = psutil.Process()
-    health_data["system"] = {
-        "memory_usage_mb": round(process.memory_info().rss / 1024 / 1024, 2),
-        "cpu_percent": process.cpu_percent(),
-        "open_files": len(process.open_files())
-    }
-    
-    # Cache statistics
+
+    # Memory / System with psutil guard
+    if PSUTIL_AVAILABLE:
+        process = psutil.Process()
+        health_data["system"] = {
+            "memory_usage_mb": round(process.memory_info().rss / 1024 / 1024, 2),
+            "cpu_percent": process.cpu_percent(interval=0.1),
+            "open_files": len(process.open_files())
+        }
+    else:
+        health_data["system"] = {"note": "psutil not installed"}
+
     health_data["cache"] = cache.stats()
-    
-    # Performance metrics
     health_data["performance"] = performance_monitor.get_stats()
-    
     return health_data
 
 # ──────────────────────────────
@@ -1635,17 +1364,38 @@ async def login(request: Request, username: str = Form(...), password: str = For
                 "request": request,
                 "error": "Du wurdest vom Admin gesperrt."
             })
-        
         request.session["username"] = username
         request.session["csrf_token"] = generate_csrf_token()
         update_session_activity(request)
-        
         if user["is_admin"]:
             return RedirectResponse("/admin", status_code=302)
         else:
             return RedirectResponse("/chat", status_code=302)
-    
     return templates.TemplateResponse("login.html", {
         "request": request, 
         "error": "Falsche Anmeldedaten"
     })
+
+# ──────────────────────────────
+# Startup: init DBs (CRITICAL)
+# ──────────────────────────────
+class DatabaseConnection:
+    def __init__(self, pool: DatabasePool):
+        self.pool = pool
+        self.conn = None
+    
+    def __enter__(self) -> sqlite3.Connection:
+        self.conn = self.pool.get_connection()
+        return self.conn
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.conn:
+            if exc_type:
+                self.conn.rollback()
+            else:
+                self.conn.commit()
+            self.pool.return_connection(self.conn)
+
+# Init DB & conversations AFTER db_pool exists
+init_db()
+init_conversations_db()
