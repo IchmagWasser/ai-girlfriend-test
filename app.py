@@ -773,20 +773,24 @@ app.add_middleware(
 )
 
 # ──────────────────────────────
-# Health-Check/Root Endpoints (HEAD/GET)
+# Health-Check/Root Endpoints (Redirect to Chat)
 # ──────────────────────────────
+from fastapi.responses import RedirectResponse, Response
+
 @app.head("/")
 async def root_head():
-    # einfacher 200er für Health-Checks (z. B. Render)
+    # Render Health-Check → 200 OK
     return Response(status_code=200)
 
 @app.get("/")
-async def root_get():
-    return {"status": "ok"}
+async def root_redirect():
+    # Direkt auf deine Chat-Seite leiten
+    return RedirectResponse(url="/chat", status_code=307)
 
 # ──────────────────────────────
 # Subscription System
 # ──────────────────────────────
+
 
 class SubscriptionTier(Enum):
     FREE = "free"
