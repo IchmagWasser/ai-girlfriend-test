@@ -73,8 +73,6 @@ from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
 
-from ollama_chat import get_response, get_response_with_messages
-
 # ──────────────────────────────
 # Enhanced Configuration & Setup
 # ──────────────────────────────
