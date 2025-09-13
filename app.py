@@ -68,8 +68,13 @@ from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
 
+from ollama_chat import get_response, get_response_with_messages  
+from concurrent.futures import ThreadPoolExecutor
+import aiofiles
+import httpx
+
 from ollama_chat import get_response, get_response_with_messages
-  
+
 # ──────────────────────────────
 # Enhanced Configuration & Setup
 # ──────────────────────────────
@@ -86,8 +91,8 @@ os.makedirs("logs", exist_ok=True)
 
 app = FastAPI(title="KI-Chat Advanced", version="2.0.0")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-# app.add_middleware(PerformanceMiddleware)  # <- Auskommentieren
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 templates = Jinja2Templates(directory="templates")
 
@@ -723,18 +728,17 @@ def get_user_conversations(username: str) -> List[Dict]:
 class PerformanceMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time_now()
-
-        # Session nur nutzen, wenn sie schon im Scope ist
+        
+        # Get user for metrics
         user = None
-        if "session" in request.scope:
-            try:
-                user = request.session.get("username")
-            except Exception:
-                user = None
-
+        if hasattr(request, 'session') and 'username' in request.session:
+            user = request.session['username']
+        
         response = await call_next(request)
+        
         duration = time_now() - start_time
-
+        
+        # Record performance metric
         metric = PerformanceMetrics(
             endpoint=str(request.url.path),
             method=request.method,
@@ -743,14 +747,15 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
             timestamp=datetime.now().isoformat(),
             user=user
         )
-
+        
+        # Log slow requests
         if duration > 1.0:
-            logger.warning("Slow request", endpoint=metric.endpoint, duration=duration, user=user)
-
+            logger.warning("Slow request", 
+                          endpoint=metric.endpoint, 
+                          duration=duration,
+                          user=user)
+        
         performance_monitor.record_metric(metric)
-        response.headers["X-Response-Time"] = f"{duration:.3f}"
-        return response
-
         
         # Add performance headers
         response.headers["X-Response-Time"] = f"{duration:.3f}"
