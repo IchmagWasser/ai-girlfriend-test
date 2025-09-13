@@ -68,9 +68,8 @@ from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
 
-from ollama_chat import get_response, get_response_with_messages  
-
-
+from ollama_chat import get_response, get_response_with_messages
+  
 # ──────────────────────────────
 # Enhanced Configuration & Setup
 # ──────────────────────────────
@@ -724,17 +723,18 @@ def get_user_conversations(username: str) -> List[Dict]:
 class PerformanceMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time_now()
-        
-        # Get user for metrics
+
+        # Session nur nutzen, wenn sie schon im Scope ist
         user = None
-        if hasattr(request, 'session') and 'username' in request.session:
-            user = request.session['username']
-        
+        if "session" in request.scope:
+            try:
+                user = request.session.get("username")
+            except Exception:
+                user = None
+
         response = await call_next(request)
-        
         duration = time_now() - start_time
-        
-        # Record performance metric
+
         metric = PerformanceMetrics(
             endpoint=str(request.url.path),
             method=request.method,
@@ -743,15 +743,14 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
             timestamp=datetime.now().isoformat(),
             user=user
         )
-        
-        # Log slow requests
+
         if duration > 1.0:
-            logger.warning("Slow request", 
-                          endpoint=metric.endpoint, 
-                          duration=duration,
-                          user=user)
-        
+            logger.warning("Slow request", endpoint=metric.endpoint, duration=duration, user=user)
+
         performance_monitor.record_metric(metric)
+        response.headers["X-Response-Time"] = f"{duration:.3f}"
+        return response
+
         
         # Add performance headers
         response.headers["X-Response-Time"] = f"{duration:.3f}"
