@@ -28,6 +28,7 @@ import queue
 from datetime import datetime, timedelta
 from time import time as time_now
 from collections import defaultdict, OrderedDict
+
 # Optional imports with fallbacks
 try:
     import psutil
@@ -64,16 +65,28 @@ except ImportError:
     DOCX_AVAILABLE = False
     docx = None
 
+# Conditional imports
+try:
+    import structlog
+    STRUCTLOG_AVAILABLE = True
+except ImportError:
+    STRUCTLOG_AVAILABLE = False
+    structlog = None
+
 from concurrent.futures import ThreadPoolExecutor
 import aiofiles
 import httpx
 
-from ollama_chat import get_response, get_response_with_messages  
-from concurrent.futures import ThreadPoolExecutor
-import aiofiles
-import httpx
-
-from ollama_chat import get_response, get_response_with_messages
+# Import mit Error Handling
+try:
+    from ollama_chat import get_response, get_response_with_messages
+    OLLAMA_AVAILABLE = True
+except ImportError:
+    OLLAMA_AVAILABLE = False
+    def get_response(msg):
+        return "Ollama nicht verfügbar"
+    def get_response_with_messages(msgs):
+        return "Ollama nicht verfügbar"
 
 # ──────────────────────────────
 # Enhanced Configuration & Setup
@@ -88,54 +101,77 @@ REDIS_URL = os.getenv("REDIS_URL", None)
 # Ensure directories exist
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs("logs", exist_ok=True)
+os.makedirs("static", exist_ok=True)
+os.makedirs("templates", exist_ok=True)
 
 app = FastAPI(title="KI-Chat Advanced", version="2.0.0")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# Static files mit Error Handling
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+except Exception as e:
+    print(f"Warning: Could not mount static files: {e}")
+
+try:
+    app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+except Exception as e:
+    print(f"Warning: Could not mount upload files: {e}")
 
 templates = Jinja2Templates(directory="templates")
 
 # ──────────────────────────────
-# Enhanced Logging System
+# Enhanced Logging System (Fixed)
 # ──────────────────────────────
-import structlog
-import logging.handlers
-
 def setup_structured_logging():
-    """Setup structured logging with JSON format"""
-    structlog.configure(
-        processors=[
-            structlog.processors.TimeStamper(fmt="ISO"),
-            structlog.processors.add_log_level,
-            structlog.processors.JSONRenderer()
-        ],
-        wrapper_class=structlog.stdlib.LoggerFactory(),
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        context_class=dict,
-        cache_logger_on_first_use=True,
-    )
+    """Setup structured logging with fallback"""
+    if STRUCTLOG_AVAILABLE:
+        try:
+            structlog.configure(
+                processors=[
+                    structlog.processors.TimeStamper(fmt="ISO"),
+                    structlog.processors.add_log_level,
+                    structlog.processors.JSONRenderer()
+                ],
+                wrapper_class=structlog.stdlib.LoggerFactory(),
+                logger_factory=structlog.stdlib.LoggerFactory(),
+                context_class=dict,
+                cache_logger_on_first_use=True,
+            )
+        except Exception as e:
+            print(f"Structlog setup failed: {e}")
     
     # File handler for structured logs
-    handler = logging.handlers.RotatingFileHandler(
-        "logs/app.json",
-        maxBytes=10485760,  # 10MB
-        backupCount=5
-    )
-    handler.setLevel(logging.INFO)
-    
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    
-    # Root logger setup
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    root_logger.addHandler(handler)
-    root_logger.addHandler(console_handler)
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            "logs/app.json",
+            maxBytes=10485760,  # 10MB
+            backupCount=5
+        )
+        handler.setLevel(logging.INFO)
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        
+        # Root logger setup
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(handler)
+        root_logger.addHandler(console_handler)
+    except Exception as e:
+        print(f"Logging setup failed: {e}")
 
 setup_structured_logging()
-logger = structlog.get_logger("app")
+
+# Logger mit Fallback
+if STRUCTLOG_AVAILABLE:
+    try:
+        logger = structlog.get_logger("app")
+    except:
+        logger = logging.getLogger("app")
+else:
+    logger = logging.getLogger("app")
 
 # File paths
 DB_PATH = "users.db"
@@ -171,39 +207,48 @@ class PerformanceMonitor:
         self.lock = threading.Lock()
     
     def record_metric(self, metric: PerformanceMetrics):
-        with self.lock:
-            self.metrics.append(metric)
-            # Keep only last 1000 metrics
-            if len(self.metrics) > 1000:
-                self.metrics = self.metrics[-1000:]
+        try:
+            with self.lock:
+                self.metrics.append(metric)
+                # Keep only last 1000 metrics
+                if len(self.metrics) > 1000:
+                    self.metrics = self.metrics[-1000:]
+        except Exception as e:
+            print(f"Error recording metric: {e}")
     
     def get_stats(self) -> Dict[str, Any]:
-        with self.lock:
-            if not self.metrics:
-                return {}
-            
-            durations = [m.duration for m in self.metrics]
-            return {
-                "total_requests": len(self.metrics),
-                "avg_response_time": sum(durations) / len(durations),
-                "max_response_time": max(durations),
-                "min_response_time": min(durations),
-                "endpoints": self._get_endpoint_stats(),
-                "last_updated": datetime.now().isoformat()
-            }
+        try:
+            with self.lock:
+                if not self.metrics:
+                    return {"total_requests": 0, "message": "No metrics available"}
+                
+                durations = [m.duration for m in self.metrics]
+                return {
+                    "total_requests": len(self.metrics),
+                    "avg_response_time": sum(durations) / len(durations),
+                    "max_response_time": max(durations),
+                    "min_response_time": min(durations),
+                    "endpoints": self._get_endpoint_stats(),
+                    "last_updated": datetime.now().isoformat()
+                }
+        except Exception as e:
+            return {"error": f"Stats error: {e}"}
     
     def _get_endpoint_stats(self):
-        endpoint_stats = defaultdict(list)
-        for metric in self.metrics:
-            endpoint_stats[metric.endpoint].append(metric.duration)
-        
-        return {
-            endpoint: {
-                "count": len(durations),
-                "avg_time": sum(durations) / len(durations),
-                "max_time": max(durations)
-            } for endpoint, durations in endpoint_stats.items()
-        }
+        try:
+            endpoint_stats = defaultdict(list)
+            for metric in self.metrics:
+                endpoint_stats[metric.endpoint].append(metric.duration)
+            
+            return {
+                endpoint: {
+                    "count": len(durations),
+                    "avg_time": sum(durations) / len(durations),
+                    "max_time": max(durations)
+                } for endpoint, durations in endpoint_stats.items()
+            }
+        except Exception as e:
+            return {"error": f"Endpoint stats error: {e}"}
 
 performance_monitor = PerformanceMonitor()
 
@@ -221,61 +266,77 @@ class MemoryCache:
         self.misses = 0
     
     def get(self, key: str) -> Optional[Any]:
-        with self.lock:
-            if key not in self.cache:
-                self.misses += 1
-                return None
-            
-            # Check TTL
-            if time_now() - self.timestamps[key] > self.ttl:
-                del self.cache[key]
-                del self.timestamps[key]
-                self.misses += 1
-                return None
-            
-            # Move to end (LRU)
-            self.cache.move_to_end(key)
-            self.hits += 1
-            return self.cache[key]
+        try:
+            with self.lock:
+                if key not in self.cache:
+                    self.misses += 1
+                    return None
+                
+                # Check TTL
+                if time_now() - self.timestamps[key] > self.ttl:
+                    del self.cache[key]
+                    del self.timestamps[key]
+                    self.misses += 1
+                    return None
+                
+                # Move to end (LRU)
+                self.cache.move_to_end(key)
+                self.hits += 1
+                return self.cache[key]
+        except Exception as e:
+            print(f"Cache get error: {e}")
+            return None
     
     def set(self, key: str, value: Any):
-        with self.lock:
-            if key in self.cache:
-                del self.cache[key]
-            
-            self.cache[key] = value
-            self.timestamps[key] = time_now()
-            
-            # Remove oldest if over limit
-            while len(self.cache) > self.max_size:
-                oldest_key = next(iter(self.cache))
-                del self.cache[oldest_key]
-                del self.timestamps[oldest_key]
+        try:
+            with self.lock:
+                if key in self.cache:
+                    del self.cache[key]
+                
+                self.cache[key] = value
+                self.timestamps[key] = time_now()
+                
+                # Remove oldest if over limit
+                while len(self.cache) > self.max_size:
+                    oldest_key = next(iter(self.cache))
+                    del self.cache[oldest_key]
+                    del self.timestamps[oldest_key]
+        except Exception as e:
+            print(f"Cache set error: {e}")
     
     def delete(self, key: str):
-        with self.lock:
-            if key in self.cache:
-                del self.cache[key]
-                del self.timestamps[key]
+        try:
+            with self.lock:
+                if key in self.cache:
+                    del self.cache[key]
+                    del self.timestamps[key]
+        except Exception as e:
+            print(f"Cache delete error: {e}")
     
     def clear(self):
-        with self.lock:
-            self.cache.clear()
-            self.timestamps.clear()
+        try:
+            with self.lock:
+                self.cache.clear()
+                self.timestamps.clear()
+        except Exception as e:
+            print(f"Cache clear error: {e}")
     
     def stats(self):
-        return {
-            "size": len(self.cache),
-            "max_size": self.max_size,
-            "hits": self.hits,
-            "misses": self.misses,
-            "hit_rate": self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0
-        }
+        try:
+            return {
+                "size": len(self.cache),
+                "max_size": self.max_size,
+                "hits": self.hits,
+                "misses": self.misses,
+                "hit_rate": self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0
+            }
+        except Exception as e:
+            return {"error": f"Cache stats error: {e}"}
 
 cache = MemoryCache()
 
 # ──────────────────────────────
-# Connection Pool Manager
+# Connection Pool Manager (Fixed)
 # ──────────────────────────────
 class DatabasePool:
     def __init__(self, database_path: str, pool_size: int = 5):
@@ -285,11 +346,26 @@ class DatabasePool:
         self.lock = threading.Lock()
         self.active_connections = 0
         
-        # Initialize pool
-        for _ in range(pool_size):
-            conn = sqlite3.connect(database_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            self.pool.put(conn)
+        # Initialize pool with error handling
+        try:
+            for _ in range(pool_size):
+                conn = sqlite3.connect(database_path, check_same_thread=False, timeout=30.0)
+                conn.row_factory = sqlite3.Row
+                # Enable WAL mode for better concurrency
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA temp_store=MEMORY")
+                conn.execute("PRAGMA mmap_size=268435456")  # 256MB
+                self.pool.put(conn)
+        except Exception as e:
+            print(f"Database pool initialization error: {e}")
+            # Create at least one connection
+            try:
+                conn = sqlite3.connect(database_path, check_same_thread=False, timeout=30.0)
+                conn.row_factory = sqlite3.Row
+                self.pool.put(conn)
+            except Exception as e2:
+                print(f"Critical database error: {e2}")
     
     def get_connection(self) -> sqlite3.Connection:
         try:
@@ -297,47 +373,88 @@ class DatabasePool:
             return conn
         except queue.Empty:
             # Pool exhausted, create temporary connection
-            with self.lock:
-                self.active_connections += 1
-            conn = sqlite3.connect(self.database_path, check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            return conn
+            try:
+                with self.lock:
+                    self.active_connections += 1
+                conn = sqlite3.connect(self.database_path, check_same_thread=False, timeout=30.0)
+                conn.row_factory = sqlite3.Row
+                return conn
+            except Exception as e:
+                print(f"Database connection error: {e}")
+                raise HTTPException(status_code=500, detail="Database connection failed")
     
     def return_connection(self, conn: sqlite3.Connection):
         try:
-            # Reset connection state
-            conn.rollback()
-            self.pool.put_nowait(conn)
+            if conn:
+                # Reset connection state
+                conn.rollback()
+                self.pool.put_nowait(conn)
         except queue.Full:
             # Pool full, close connection
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
             with self.lock:
-                self.active_connections -= 1
+                if self.active_connections > 0:
+                    self.active_connections -= 1
+        except Exception as e:
+            print(f"Error returning connection: {e}")
+            try:
+                conn.close()
+            except:
+                pass
     
     def close_all(self):
         while not self.pool.empty():
-            conn = self.pool.get()
-            conn.close()
+            try:
+                conn = self.pool.get()
+                conn.close()
+            except:
+                pass
 
-db_pool = DatabasePool(DB_PATH)
+# Initialize database with error handling
+try:
+    db_pool = DatabasePool(DB_PATH)
+except Exception as e:
+    print(f"Database pool creation failed: {e}")
+    # Create a minimal fallback
+    db_pool = None
 
-# Context manager for database connections
+# Context manager for database connections (Fixed)
 class DatabaseConnection:
     def __init__(self, pool: DatabasePool):
         self.pool = pool
         self.conn = None
     
     def __enter__(self) -> sqlite3.Connection:
+        if self.pool is None:
+            # Fallback connection
+            self.conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
+            self.conn.row_factory = sqlite3.Row
+            return self.conn
+        
         self.conn = self.pool.get_connection()
         return self.conn
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
-            if exc_type:
-                self.conn.rollback()
-            else:
-                self.conn.commit()
-            self.pool.return_connection(self.conn)
+            try:
+                if exc_type:
+                    self.conn.rollback()
+                else:
+                    self.conn.commit()
+                
+                if self.pool:
+                    self.pool.return_connection(self.conn)
+                else:
+                    self.conn.close()
+            except Exception as e:
+                print(f"Database context exit error: {e}")
+                try:
+                    self.conn.close()
+                except:
+                    pass
 
 # ──────────────────────────────
 # Background Task System
@@ -352,7 +469,10 @@ class BackgroundTaskManager:
     
     def add_task(self, func, *args, **kwargs):
         """Add a task to the background queue"""
-        self.task_queue.put((func, args, kwargs))
+        try:
+            self.task_queue.put((func, args, kwargs))
+        except Exception as e:
+            print(f"Error adding background task: {e}")
     
     def _worker(self):
         """Background worker thread"""
@@ -364,7 +484,13 @@ class BackgroundTaskManager:
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.error("Background task failed", error=str(e))
+                try:
+                    if hasattr(logger, 'error'):
+                        logger.error(f"Background task failed: {e}")
+                    else:
+                        print(f"Background task failed: {e}")
+                except:
+                    print(f"Background task failed: {e}")
     
     def shutdown(self):
         self.running = False
@@ -373,7 +499,7 @@ class BackgroundTaskManager:
 background_tasks = BackgroundTaskManager()
 
 # ──────────────────────────────
-# File Processing System
+# File Processing System (Fixed)
 # ──────────────────────────────
 class FileProcessor:
     ALLOWED_TYPES = {
@@ -385,57 +511,89 @@ class FileProcessor:
     @staticmethod
     async def process_file(file: UploadFile) -> Dict[str, Any]:
         """Process uploaded file and extract content"""
-        content = await file.read()
-        
-        # Detect file type (fallback if magic is not available)
-        if MAGIC_AVAILABLE:
-            mime_type = magic.from_buffer(content, mime=True)
-        else:
-            # Simple fallback based on file extension
-            filename = file.filename.lower()
-            if filename.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
-                mime_type = 'image/jpeg'
-            elif filename.endswith('.pdf'):
-                mime_type = 'application/pdf'
-            elif filename.endswith('.docx'):
-                mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            elif filename.endswith('.txt'):
-                mime_type = 'text/plain'
-            else:
-                mime_type = 'application/octet-stream'
-        
-        result = {
-            'filename': file.filename,
-            'mime_type': mime_type,
-            'size': len(content),
-            'content': '',
-            'metadata': {}
-        }
-        
         try:
-            if mime_type in FileProcessor.ALLOWED_TYPES['image']:
-                result['content'] = await FileProcessor._process_image(content)
-                result['type'] = 'image'
+            content = await file.read()
             
-            elif mime_type in FileProcessor.ALLOWED_TYPES['document']:
-                result['content'] = await FileProcessor._process_document(content, mime_type)
-                result['type'] = 'document'
-            
-            elif mime_type in FileProcessor.ALLOWED_TYPES['text']:
-                result['content'] = content.decode('utf-8')
-                result['type'] = 'text'
-            
+            # Detect file type (fallback if magic is not available)
+            if MAGIC_AVAILABLE and magic:
+                try:
+                    mime_type = magic.from_buffer(content, mime=True)
+                except Exception:
+                    mime_type = FileProcessor._get_mime_from_filename(file.filename)
             else:
-                raise ValueError(f"Unsupported file type: {mime_type}")
-        
+                mime_type = FileProcessor._get_mime_from_filename(file.filename)
+            
+            result = {
+                'filename': file.filename,
+                'mime_type': mime_type,
+                'size': len(content),
+                'content': '',
+                'metadata': {},
+                'type': 'unknown'
+            }
+            
+            try:
+                if mime_type in FileProcessor.ALLOWED_TYPES['image']:
+                    result['content'] = await FileProcessor._process_image(content)
+                    result['type'] = 'image'
+                
+                elif mime_type in FileProcessor.ALLOWED_TYPES['document']:
+                    result['content'] = await FileProcessor._process_document(content, mime_type)
+                    result['type'] = 'document'
+                
+                elif mime_type in FileProcessor.ALLOWED_TYPES['text']:
+                    result['content'] = content.decode('utf-8', errors='ignore')
+                    result['type'] = 'text'
+                
+                else:
+                    result['error'] = f"Unsupported file type: {mime_type}"
+            
+            except Exception as e:
+                result['error'] = str(e)
+            
+            return result
+            
         except Exception as e:
-            result['error'] = str(e)
-        
-        return result
+            return {
+                'filename': getattr(file, 'filename', 'unknown'),
+                'error': f"File processing failed: {str(e)}",
+                'type': 'error'
+            }
+    
+    @staticmethod
+    def _get_mime_from_filename(filename: str) -> str:
+        """Get MIME type from filename extension"""
+        if not filename:
+            return 'application/octet-stream'
+            
+        filename_lower = filename.lower()
+        if filename_lower.endswith(('.jpg', '.jpeg')):
+            return 'image/jpeg'
+        elif filename_lower.endswith('.png'):
+            return 'image/png'
+        elif filename_lower.endswith('.gif'):
+            return 'image/gif'
+        elif filename_lower.endswith('.webp'):
+            return 'image/webp'
+        elif filename_lower.endswith('.pdf'):
+            return 'application/pdf'
+        elif filename_lower.endswith('.docx'):
+            return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        elif filename_lower.endswith('.txt'):
+            return 'text/plain'
+        elif filename_lower.endswith('.csv'):
+            return 'text/csv'
+        elif filename_lower.endswith('.md'):
+            return 'text/markdown'
+        else:
+            return 'application/octet-stream'
     
     @staticmethod
     async def _process_image(content: bytes) -> str:
         """Process image file"""
+        if not PIL_AVAILABLE or not Image:
+            return "Bildverarbeitung nicht verfügbar (PIL nicht installiert)"
+            
         try:
             with Image.open(io.BytesIO(content)) as img:
                 return f"Bild analysiert: {img.format} Format, Größe: {img.size[0]}x{img.size[1]} Pixel. Bereit für KI-Analyse."
@@ -447,29 +605,42 @@ class FileProcessor:
         """Extract text from document files"""
         try:
             if mime_type == 'application/pdf':
-                # PDF processing
-                pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
-                text = ""
-                for page in pdf_reader.pages:
-                    text += page.extract_text() + "\n"
-                return text
+                if not PDF_AVAILABLE or not PyPDF2:
+                    return "PDF-Verarbeitung nicht verfügbar (PyPDF2 nicht installiert)"
+                
+                try:
+                    pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+                    text = ""
+                    for page in pdf_reader.pages:
+                        text += page.extract_text() + "\n"
+                    return text if text.strip() else "Kein Text im PDF gefunden"
+                except Exception as e:
+                    return f"Fehler beim PDF lesen: {str(e)}"
             
             elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-                # DOCX processing
-                doc = docx.Document(io.BytesIO(content))
-                text = ""
-                for paragraph in doc.paragraphs:
-                    text += paragraph.text + "\n"
-                return text
+                if not DOCX_AVAILABLE or not docx:
+                    return "DOCX-Verarbeitung nicht verfügbar (python-docx nicht installiert)"
+                
+                try:
+                    doc = docx.Document(io.BytesIO(content))
+                    text = ""
+                    for paragraph in doc.paragraphs:
+                        text += paragraph.text + "\n"
+                    return text if text.strip() else "Kein Text im DOCX gefunden"
+                except Exception as e:
+                    return f"Fehler beim DOCX lesen: {str(e)}"
             
             elif mime_type == 'text/plain':
-                return content.decode('utf-8')
+                return content.decode('utf-8', errors='ignore')
             
+            else:
+                return f"Dokumenttyp {mime_type} wird nicht unterstützt"
+                
         except Exception as e:
             return f"Fehler beim Verarbeiten des Dokuments: {str(e)}"
 
 # ──────────────────────────────
-# Multiple AI Models Support
+# Multiple AI Models Support (Fixed)
 # ──────────────────────────────
 class AIModelManager:
     def __init__(self):
@@ -477,7 +648,7 @@ class AIModelManager:
             'ollama': {
                 'name': 'Llama 3.2 (Local)',
                 'description': 'Schnelles lokales Modell via Ollama',
-                'available': True,
+                'available': OLLAMA_AVAILABLE,
                 'cost_per_1k': 0,
                 'max_tokens': 4096
             },
@@ -504,7 +675,10 @@ class AIModelManager:
         
         try:
             if model == 'ollama':
-                return get_response_with_messages(messages)
+                if OLLAMA_AVAILABLE:
+                    return get_response_with_messages(messages)
+                else:
+                    return "Ollama ist nicht verfügbar. Bitte installieren Sie Ollama oder verwenden Sie ein anderes Modell."
             
             elif model.startswith('openai'):
                 return await self._get_openai_response(messages, model, **kwargs)
@@ -513,14 +687,29 @@ class AIModelManager:
                 raise ValueError(f"Unknown model: {model}")
         
         except Exception as e:
-            logger.error("AI model error", model=model, error=str(e))
-            # Fallback to ollama
-            if model != 'ollama':
-                return await self.get_response(messages, 'ollama', **kwargs)
-            raise
+            error_msg = f"AI model error ({model}): {str(e)}"
+            try:
+                if hasattr(logger, 'error'):
+                    logger.error(error_msg, model=model, error=str(e))
+                else:
+                    print(error_msg)
+            except:
+                print(error_msg)
+            
+            # Fallback to ollama if possible
+            if model != 'ollama' and OLLAMA_AVAILABLE:
+                try:
+                    return await self.get_response(messages, 'ollama', **kwargs)
+                except:
+                    pass
+            
+            return f"Fehler bei der KI-Antwort: {str(e)}"
     
     async def _get_openai_response(self, messages: List[Dict], model: str, **kwargs) -> str:
         """Get response from OpenAI API"""
+        if not OPENAI_API_KEY:
+            raise ValueError("OpenAI API Key nicht konfiguriert")
+            
         model_name = "gpt-3.5-turbo" if "3.5" in model else "gpt-4"
         
         headers = {
@@ -535,19 +724,29 @@ class AIModelManager:
             "temperature": kwargs.get('temperature', 0.7)
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=30
-            )
-            
-            if response.status_code != 200:
-                raise HTTPException(status_code=response.status_code, detail="OpenAI API error")
-            
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=headers,
+                    json=data
+                )
+                
+                if response.status_code != 200:
+                    error_detail = f"OpenAI API error: {response.status_code}"
+                    try:
+                        error_detail += f" - {response.json()}"
+                    except:
+                        error_detail += f" - {response.text}"
+                    raise HTTPException(status_code=response.status_code, detail=error_detail)
+                
+                result = response.json()
+                return result["choices"][0]["message"]["content"]
+        
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="OpenAI API Timeout")
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"OpenAI API connection error: {str(e)}")
     
     def get_available_models(self, subscription_tier: str = 'free') -> Dict:
         """Get available models based on subscription"""
@@ -579,151 +778,240 @@ class ChatSearchEngine:
     
     def search_messages(self, username: str, query: str, limit: int = 50) -> List[Dict]:
         """Search through user's chat history"""
-        query_terms = self._process_query(query)
-        if not query_terms:
+        try:
+            query_terms = self._process_query(query)
+            if not query_terms:
+                return []
+            
+            with DatabaseConnection(db_pool) as conn:
+                cursor = conn.cursor()
+                
+                # Build search query
+                placeholders = ' OR '.join(['content LIKE ?' for _ in query_terms])
+                like_terms = [f'%{term}%' for term in query_terms]
+                
+                cursor.execute(f"""
+                    SELECT role, content, timestamp, 
+                           CASE 
+                               WHEN {placeholders} THEN 1 
+                               ELSE 0 
+                           END as relevance
+                    FROM chat_history 
+                    WHERE username = ? AND ({placeholders})
+                    ORDER BY relevance DESC, timestamp DESC
+                    LIMIT ?
+                """, [username] + like_terms + like_terms + [limit])
+                
+                results = []
+                for row in cursor.fetchall():
+                    results.append({
+                        'role': row['role'],
+                        'content': row['content'],
+                        'timestamp': row['timestamp'],
+                        'relevance': row['relevance'],
+                        'snippet': self._create_snippet(row['content'], query_terms)
+                    })
+                
+                return results
+                
+        except Exception as e:
+            print(f"Search error: {e}")
             return []
-        
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            
-            # Build search query
-            placeholders = ' OR '.join(['content LIKE ?' for _ in query_terms])
-            like_terms = [f'%{term}%' for term in query_terms]
-            
-            cursor.execute(f"""
-                SELECT role, content, timestamp, 
-                       CASE 
-                           WHEN {placeholders} THEN 1 
-                           ELSE 0 
-                       END as relevance
-                FROM chat_history 
-                WHERE username = ? AND ({placeholders})
-                ORDER BY relevance DESC, timestamp DESC
-                LIMIT ?
-            """, [username] + like_terms + like_terms + [limit])
-            
-            results = []
-            for row in cursor.fetchall():
-                results.append({
-                    'role': row['role'],
-                    'content': row['content'],
-                    'timestamp': row['timestamp'],
-                    'relevance': row['relevance'],
-                    'snippet': self._create_snippet(row['content'], query_terms)
-                })
-            
-            return results
     
     def _process_query(self, query: str) -> List[str]:
         """Process search query into terms"""
-        # Remove special characters and convert to lowercase
-        query = re.sub(r'[^\w\s]', ' ', query.lower())
-        terms = query.split()
-        
-        # Remove stop words and short terms
-        terms = [term for term in terms if term not in self.stop_words and len(term) > 2]
-        
-        return terms[:10]  # Limit to 10 terms
+        try:
+            # Remove special characters and convert to lowercase
+            query = re.sub(r'[^\w\s]', ' ', query.lower())
+            terms = query.split()
+            
+            # Remove stop words and short terms
+            terms = [term for term in terms if term not in self.stop_words and len(term) > 2]
+            
+            return terms[:10]  # Limit to 10 terms
+            
+        except Exception as e:
+            print(f"Query processing error: {e}")
+            return []
     
     def _create_snippet(self, content: str, query_terms: List[str]) -> str:
         """Create a snippet highlighting query terms"""
-        content_lower = content.lower()
-        
-        # Find first occurrence of any query term
-        first_pos = len(content)
-        for term in query_terms:
-            pos = content_lower.find(term)
-            if pos != -1 and pos < first_pos:
-                first_pos = pos
-        
-        # Create snippet around first occurrence
-        start = max(0, first_pos - 50)
-        end = min(len(content), first_pos + 150)
-        snippet = content[start:end]
-        
-        # Add ellipsis if truncated
-        if start > 0:
-            snippet = "..." + snippet
-        if end < len(content):
-            snippet = snippet + "..."
-        
-        # Highlight query terms
-        for term in query_terms:
-            pattern = re.compile(re.escape(term), re.IGNORECASE)
-            snippet = pattern.sub(f'<mark>{term}</mark>', snippet)
-        
-        return snippet
+        try:
+            if not content or not query_terms:
+                return content[:200] + "..." if len(content) > 200 else content
+                
+            content_lower = content.lower()
+            
+            # Find first occurrence of any query term
+            first_pos = len(content)
+            for term in query_terms:
+                pos = content_lower.find(term)
+                if pos != -1 and pos < first_pos:
+                    first_pos = pos
+            
+            # Create snippet around first occurrence
+            start = max(0, first_pos - 50)
+            end = min(len(content), first_pos + 150)
+            snippet = content[start:end]
+            
+            # Add ellipsis if truncated
+            if start > 0:
+                snippet = "..." + snippet
+            if end < len(content):
+                snippet = snippet + "..."
+            
+            # Highlight query terms
+            for term in query_terms:
+                try:
+                    pattern = re.compile(re.escape(term), re.IGNORECASE)
+                    snippet = pattern.sub(f'<mark>{term}</mark>', snippet)
+                except Exception:
+                    continue
+            
+            return snippet
+            
+        except Exception as e:
+            print(f"Snippet creation error: {e}")
+            return content[:200] + "..." if len(content) > 200 else content
 
 search_engine = ChatSearchEngine()
 
 # ──────────────────────────────
-# Conversation Threading System
+# Conversation Threading System (Fixed)
 # ──────────────────────────────
 def init_conversations_db():
     """Initialize conversation threading database"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                title TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
-                message_count INTEGER DEFAULT 0,
-                is_archived BOOLEAN DEFAULT 0,
-                FOREIGN KEY (username) REFERENCES users (username)
-            )
-        """)
-        
-        # Add conversation_id to chat_history if not exists
-        cursor.execute("PRAGMA table_info(chat_history)")
-        columns = [column[1] for column in cursor.fetchall()]
-        
-        if 'conversation_id' not in columns:
-            cursor.execute("ALTER TABLE chat_history ADD COLUMN conversation_id TEXT")
-            # Create default conversation for existing messages
+    try:
+        with DatabaseConnection(db_pool) as conn:
+            cursor = conn.cursor()
+            
             cursor.execute("""
-                INSERT OR IGNORE INTO conversations (id, username, title)
-                SELECT DISTINCT 'default_' || username, username, 'Hauptunterhaltung'
-                FROM chat_history
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    message_count INTEGER DEFAULT 0,
+                    is_archived BOOLEAN DEFAULT 0
+                )
             """)
-            # Assign existing messages to default conversation
-            cursor.execute("""
-                UPDATE chat_history SET conversation_id = 'default_' || username
-                WHERE conversation_id IS NULL
-            """)
+            
+            # Check if chat_history table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_history'")
+            if cursor.fetchone():
+                # Add conversation_id to chat_history if not exists
+                cursor.execute("PRAGMA table_info(chat_history)")
+                columns = [column[1] for column in cursor.fetchall()]
+                
+                if 'conversation_id' not in columns:
+                    cursor.execute("ALTER TABLE chat_history ADD COLUMN conversation_id TEXT")
+                    
+                    # Create default conversation for existing messages
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO conversations (id, username, title)
+                        SELECT DISTINCT 'default_' || username, username, 'Hauptunterhaltung'
+                        FROM chat_history
+                        WHERE username IS NOT NULL
+                    """)
+                    
+                    # Assign existing messages to default conversation
+                    cursor.execute("""
+                        UPDATE chat_history SET conversation_id = 'default_' || username
+                        WHERE conversation_id IS NULL AND username IS NOT NULL
+                    """)
+    except Exception as e:
+        print(f"Error initializing conversations database: {e}")
 
 def create_conversation(username: str, title: str = None) -> str:
     """Create a new conversation thread"""
-    conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
-    title = title or f"Unterhaltung {datetime.now().strftime('%d.%m. %H:%M')}"
-    
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO conversations (id, username, title)
-            VALUES (?, ?, ?)
-        """, (conversation_id, username, title))
-    
-    return conversation_id
+    try:
+        conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
+        title = title or f"Unterhaltung {datetime.now().strftime('%d.%m. %H:%M')}"
+        
+        with DatabaseConnection(db_pool) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO conversations (id, username, title)
+                VALUES (?, ?, ?)
+            """, (conversation_id, username, title))
+        
+        return conversation_id
+    except Exception as e:
+        print(f"Error creating conversation: {e}")
+        return f"default_{username}"
 
 def get_user_conversations(username: str) -> List[Dict]:
     """Get all conversations for a user"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, title, created_at, last_activity, message_count, is_archived
-            FROM conversations
-            WHERE username = ? AND is_archived = 0
-            ORDER BY last_activity DESC
-        """, (username,))
-        
-        return [dict(row) for row in cursor.fetchall()]
+    try:
+        with DatabaseConnection(db_pool) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, title, created_at, last_activity, message_count, is_archived
+                FROM conversations
+                WHERE username = ? AND is_archived = 0
+                ORDER BY last_activity DESC
+            """, (username,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        print(f"Error getting conversations: {e}")
+        return []
 
 # ──────────────────────────────
-# Performance Monitoring Middleware
+# Database Initialization (Fixed)
+# ──────────────────────────────
+def init_database():
+    """Initialize all database tables"""
+    try:
+        with DatabaseConnection(db_pool) as conn:
+            cursor = conn.cursor()
+            
+            # Users table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_login DATETIME,
+                    is_active BOOLEAN DEFAULT 1,
+                    subscription_tier TEXT DEFAULT 'free'
+                )
+            """)
+            
+            # Chat history table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    conversation_id TEXT,
+                    FOREIGN KEY (username) REFERENCES users (username)
+                )
+            """)
+            
+            # Create indexes for better performance
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_username ON chat_history(username)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_history(timestamp)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_conversation ON chat_history(conversation_id)")
+            
+        # Initialize conversations
+        init_conversations_db()
+        
+        print("Database initialized successfully")
+        
+    except Exception as e:
+        print(f"Database initialization error: {e}")
+
+# Initialize database on startup
+init_database()
+
+# ──────────────────────────────
+# Performance Monitoring Middleware (Fixed)
 # ──────────────────────────────
 class PerformanceMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -731,39 +1019,243 @@ class PerformanceMiddleware(BaseHTTPMiddleware):
         
         # Get user for metrics
         user = None
-        if hasattr(request, 'session') and 'username' in request.session:
-            user = request.session['username']
+        try:
+            if hasattr(request, 'session') and request.session and 'username' in request.session:
+                user = request.session['username']
+        except Exception:
+            pass
         
         response = await call_next(request)
         
         duration = time_now() - start_time
         
         # Record performance metric
-        metric = PerformanceMetrics(
-            endpoint=str(request.url.path),
-            method=request.method,
-            duration=duration,
-            status_code=response.status_code,
-            timestamp=datetime.now().isoformat(),
-            user=user
-        )
-        
-        # Log slow requests
-        if duration > 1.0:
-            logger.warning("Slow request", 
-                          endpoint=metric.endpoint, 
-                          duration=duration,
-                          user=user)
-        
-        performance_monitor.record_metric(metric)
-        
-        # Add performance headers
-        response.headers["X-Response-Time"] = f"{duration:.3f}"
+        try:
+            metric = PerformanceMetrics(
+                endpoint=str(request.url.path),
+                method=request.method,
+                duration=duration,
+                status_code=response.status_code,
+                timestamp=datetime.now().isoformat(),
+                user=user
+            )
+            
+            # Log slow requests
+            if duration > 1.0:
+                try:
+                    if hasattr(logger, 'warning'):
+                        logger.warning("Slow request", 
+                                      endpoint=metric.endpoint, 
+                                      duration=duration,
+                                      user=user)
+                    else:
+                        print(f"Slow request: {metric.endpoint} took {duration:.3f}s")
+                except:
+                    print(f"Slow request: {metric.endpoint} took {duration:.3f}s")
+            
+            performance_monitor.record_metric(metric)
+            
+            # Add performance headers
+            response.headers["X-Response-Time"] = f"{duration:.3f}"
+            
+        except Exception as e:
+            print(f"Performance monitoring error: {e}")
         
         return response
 
 app.add_middleware(PerformanceMiddleware)
 
+# ──────────────────────────────
+# Basic Routes for Testing
+# ──────────────────────────────
+@app.get("/")
+async def root():
+    """Root endpoint for testing"""
+    return {"message": "KI-Chat Advanced is running", "status": "ok"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        with DatabaseConnection(db_pool) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+        
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "timestamp": datetime.now().isoformat(),
+            "models": {
+                "ollama": OLLAMA_AVAILABLE,
+                "openai": bool(OPENAI_API_KEY)
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.get("/stats")
+async def get_stats():
+    """Get performance statistics"""
+    try:
+        return {
+            "performance": performance_monitor.get_stats(),
+            "cache": cache.stats(),
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        return {"error": f"Stats error: {e}"}
+
+# ──────────────────────────────
+# Error Handlers
+# ──────────────────────────────
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle all unhandled exceptions"""
+    try:
+        if hasattr(logger, 'error'):
+            logger.error("Unhandled exception", 
+                        path=str(request.url.path),
+                        method=request.method,
+                        error=str(exc))
+        else:
+            print(f"Unhandled exception at {request.url.path}: {exc}")
+    except:
+        print(f"Unhandled exception: {exc}")
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "error": str(exc),
+            "path": str(request.url.path)
+        }
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTP exceptions"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "path": str(request.url.path)
+        }
+    )
+
+# ──────────────────────────────
+# Startup and Shutdown Events
+# ──────────────────────────────
+@app.on_event("startup")
+async def startup_event():
+    """Application startup"""
+    try:
+        print("Starting KI-Chat Advanced...")
+        print(f"Ollama available: {OLLAMA_AVAILABLE}")
+        print(f"OpenAI available: {bool(OPENAI_API_KEY)}")
+        print(f"PIL available: {PIL_AVAILABLE}")
+        print(f"PDF available: {PDF_AVAILABLE}")
+        print(f"DOCX available: {DOCX_AVAILABLE}")
+        print("Application started successfully")
+    except Exception as e:
+        print(f"Startup error: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Application shutdown"""
+    try:
+        print("Shutting down KI-Chat Advanced...")
+        background_tasks.shutdown()
+        if db_pool:
+            db_pool.close_all()
+        print("Application shut down successfully")
+    except Exception as e:
+        print(f"Shutdown error: {e}")
+
+# ──────────────────────────────
+# Additional utility functions
+# ──────────────────────────────
+def ensure_chat_table():
+    """Ensure chat_history table exists"""
+    global CHAT_TABLE_CREATED
+    if CHAT_TABLE_CREATED:
+        return
+    
+    try:
+        with DatabaseConnection(db_pool) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    conversation_id TEXT
+                )
+            """)
+        CHAT_TABLE_CREATED = True
+    except Exception as e:
+        print(f"Error creating chat table: {e}")
+
+def save_message_to_db(username: str, role: str, content: str, conversation_id: str = None):
+    """Save a message to the database"""
+    try:
+        ensure_chat_table()
+        with DatabaseConnection(db_pool) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO chat_history (username, role, content, conversation_id)
+                VALUES (?, ?, ?, ?)
+            """, (username, role, content, conversation_id))
+    except Exception as e:
+        print(f"Error saving message to database: {e}")
+
+def get_chat_history(username: str, conversation_id: str = None, limit: int = 50) -> List[Dict]:
+    """Get chat history for a user"""
+    try:
+        ensure_chat_table()
+        with DatabaseConnection(db_pool) as conn:
+            cursor = conn.cursor()
+            
+            if conversation_id:
+                cursor.execute("""
+                    SELECT role, content, timestamp FROM chat_history 
+                    WHERE username = ? AND conversation_id = ?
+                    ORDER BY timestamp DESC LIMIT ?
+                """, (username, conversation_id, limit))
+            else:
+                cursor.execute("""
+                    SELECT role, content, timestamp FROM chat_history 
+                    WHERE username = ?
+                    ORDER BY timestamp DESC LIMIT ?
+                """, (username, limit))
+            
+            messages = []
+            for row in cursor.fetchall():
+                messages.append({
+                    'role': row['role'],
+                    'content': row['content'],
+                    'timestamp': row['timestamp']
+                })
+            
+            return list(reversed(messages))  # Return in chronological order
+            
+    except Exception as e:
+        print(f"Error getting chat history: {e}")
+        return []
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
 # ──────────────────────────────
 # Subscription System
 # ──────────────────────────────
