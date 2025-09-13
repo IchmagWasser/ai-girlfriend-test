@@ -1,13 +1,1003 @@
-from fastapi import FastAPI, Request, Form, HTTPException, Header, File, UploadFile, BackgroundTasks
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, Response, JSONResponse
+# ──────────────────────────────
+# Rate Limiting & Session Management
+# ──────────────────────────────
+def load_rate_limits():
+    """Lädt Rate-Limit-Daten"""
+    if os.path.exists(RATE_LIMIT_FILE):
+        try:
+            with open(RATE_LIMIT_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_rate_limits(limits):
+    """Speichert Rate-Limit-Daten"""
+    with open(RATE_LIMIT_FILE, 'w') as f:
+        json.dump(limits, f)
+
+def check_rate_limit(username: str) -> bool:
+    """Prüft ob User Rate-Limit erreicht hat"""
+    limits = load_rate_limits()
+    current_time = time()
+    
+    user_data = limits.get(username, {"messages": [], "last_reset": current_time})
+    
+    hour_ago = current_time - 3600
+    user_data["messages"] = [msg_time for msg_time in user_data["messages"] if msg_time > hour_ago]
+    
+    if len(user_data["messages"]) >= MESSAGES_PER_HOUR:
+        return False
+    
+    user_data["messages"].append(current_time)
+    limits[username] = user_data
+    save_rate_limits(limits)
+    
+    return True
+
+def update_session_activity(request: Request):
+    """Aktualisiert die letzte Aktivität in der Session"""
+    request.session["last_activity"] = time()
+
+def check_session_timeout(request: Request) -> bool:
+    """Prüft ob Session abgelaufen ist"""
+    last_activity = request.session.get("last_activity")
+    if not last_activity:
+        return True
+    
+    return (time() - last_activity) > SESSION_TIMEOUT_SECONDS
+
+def require_active_session(request: Request):
+    """Middleware-ähnliche Funktion für Session-Check"""
+    if not request.session.get("username"):
+        return RedirectResponse("/", status_code=302)
+    
+    if check_session_timeout(request):
+        request.session.clear()
+        return RedirectResponse("/?timeout=1", status_code=302)
+    
+    update_session_activity(request)
+    return None
+
+def is_admin(request: Request) -> bool:
+    username = request.session.get("username")
+    if username:
+        user = get_user(username)
+        return user and user["is_admin"]
+    return False
+
+def admin_redirect_guard(request: Request):
+    if not is_admin(request):
+        return RedirectResponse("/", status_code=302)
+    return None
+
+# ──────────────────────────────
+# Validation Helper
+# ──────────────────────────────
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """Validiert Passwort-Stärke"""
+    if len(password) < 8:
+        return False, "Passwort muss mindestens 8 Zeichen haben"
+    
+    if not any(c.isupper() for c in password):
+        return False, "Passwort muss mindestens einen Großbuchstaben enthalten"
+    
+    if not any(c.islower() for c in password):
+        return False, "Passwort muss mindestens einen Kleinbuchstaben enthalten"
+    
+    if not any(c.isdigit() for c in password):
+        return False, "Passwort muss mindestens eine Zahl enthalten"
+    
+    return True, "Passwort ist sicher"
+
+def validate_username(username: str) -> tuple[bool, str]:
+    """Validiert Username"""
+    if len(username) < 3:
+        return False, "Benutzername muss mindestens 3 Zeichen haben"
+    
+    if len(username) > 20:
+        return False, "Benutzername darf maximal 20 Zeichen haben"
+    
+    if not username.replace('_', '').replace('-', '').isalnum():
+        return False, "Benutzername darf nur Buchstaben, Zahlen, _ und - enthalten"
+    
+    return True, "Benutzername ist gültig"
+
+# ──────────────────────────────
+# Routes - Auth
+# ──────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    request.session.clear()
+    timeout = request.query_params.get("timeout")
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "timeout_message": "Deine Session ist abgelaufen. Bitte melde dich erneut an." if timeout else None
+    })
+
+@app.post("/login", response_class=HTMLResponse)
+async def login(request: Request, username: str = Form(...), password: str = Form(...)):
+    if check_login(username, password):
+        user = get_user(username)
+        if user["is_blocked"]:
+            return templates.TemplateResponse("login.html", {
+                "request": request,
+                "error": "Du wurdest vom Admin gesperrt."
+            })
+        
+        request.session["username"] = username
+        request.session["csrf_token"] = generate_csrf_token()
+        update_session_activity(request)
+        
+        if user["is_admin"]:
+            return RedirectResponse("/admin", status_code=302)
+        else:
+            return RedirectResponse("/chat", status_code=302)
+    
+    return templates.TemplateResponse("login.html", {
+        "request": request, 
+        "error": "Falsche Anmeldedaten"
+    })
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request):
+    csrf_token = generate_csrf_token()
+    return templates.TemplateResponse("register.html", {
+        "request": request,
+        "csrf_token": csrf_token
+    })
+
+@app.post("/register", response_class=HTMLResponse)
+async def register(request: Request, 
+                  username: str = Form(...), 
+                  password: str = Form(...), 
+                  question: str = Form(...), 
+                  answer: str = Form(...),
+                  csrf_token: str = Form(...)):
+    
+    # Validation
+    username_valid, username_msg = validate_username(username)
+    password_valid, password_msg = validate_password_strength(password)
+    
+    if not username_valid:
+        return templates.TemplateResponse("register.html", {
+            "request": request, 
+            "error": username_msg,
+            "csrf_token": generate_csrf_token()
+        })
+    
+    if not password_valid:
+        return templates.TemplateResponse("register.html", {
+            "request": request, 
+            "error": password_msg,
+            "csrf_token": generate_csrf_token()
+        })
+    
+    if save_user(username, password, question, answer):
+        return RedirectResponse("/", status_code=302)
+    
+    return templates.TemplateResponse("register.html", {
+        "request": request, 
+        "error": "Benutzer existiert bereits",
+        "csrf_token": generate_csrf_token()
+    })
+
+@app.get("/reset", response_class=HTMLResponse)
+async def reset_page(request: Request):
+    return templates.TemplateResponse("reset.html", {
+        "request": request, 
+        "error": "", 
+        "success": "",
+        "csrf_token": generate_csrf_token()
+    })
+
+@app.post("/reset", response_class=HTMLResponse)
+async def reset_post(request: Request, 
+                    username: str = Form(...), 
+                    answer: str = Form(...), 
+                    new_password: str = Form(...),
+                    csrf_token: str = Form(...)):
+    
+    password_valid, password_msg = validate_password_strength(new_password)
+    if not password_valid:
+        return templates.TemplateResponse("reset.html", {
+            "request": request, 
+            "error": password_msg, 
+            "success": "",
+            "csrf_token": generate_csrf_token()
+        })
+    
+    if verify_security_answer(username, answer):
+        reset_password(username, new_password)
+        return RedirectResponse("/", status_code=302)
+    
+    return templates.TemplateResponse("reset.html", {
+        "request": request, 
+        "error": "Antwort falsch", 
+        "success": "",
+        "csrf_token": generate_csrf_token()
+    })
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/", status_code=302)
+
+# ──────────────────────────────
+# Routes - Chat (with Subscription Limits)
+# ──────────────────────────────
+@app.get("/chat", response_class=HTMLResponse)
+async def chat_page(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    history = get_user_history(username)
+    tier = get_user_subscription(username)
+    theme = get_user_theme(username)
+    
+    return templates.TemplateResponse("chat.html", {
+        "request": request, 
+        "username": username,
+        "chat_history": history,
+        "session_timeout_minutes": SESSION_TIMEOUT_MINUTES,
+        "subscription_tier": tier.value,
+        "theme": theme,
+        "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+    })
+
+@app.post("/chat")
+async def chat_with_subscription_limits(req: Request):
+    redirect = require_active_session(req)
+    if redirect:
+        return {"reply": "Session abgelaufen. Bitte neu anmelden.", "redirect": "/"}
+    
+    username = req.session.get("username")
+    
+    if not check_daily_limit(username, "messages"):
+        tier = get_user_subscription(username)
+        limit = SUBSCRIPTION_LIMITS[tier]["messages_per_day"]
+        return {
+            "reply": f"Tägliches Limit erreicht ({limit} Nachrichten). Upgrade auf Premium für mehr!",
+            "upgrade_needed": True,
+            "current_tier": tier.value
+        }
+    
+    if not check_rate_limit(username):
+        return {"reply": f"Rate-Limit erreicht! Maximal {MESSAGES_PER_HOUR} Nachrichten pro Stunde."}
+    
+    data = await req.json()
+    user_message = data.get("message", "")
+    
+    if not user_message.strip():
+        return {"reply": "Leere Nachricht."}
+    
+    save_user_history(username, "user", user_message)
+    
+    history = get_user_history(username)
+    tier = get_user_subscription(username)
+    max_context = SUBSCRIPTION_LIMITS[tier]["max_context_length"]
+    limited_history = history[-max_context*2:] if max_context > 0 else history
+    
+    user_persona = get_user_persona(username)
+    
+    available_personas = get_available_personas(username)
+    if user_persona not in available_personas:
+        user_persona = "standard"
+    
+    try:
+        raw_response = get_response_with_context(user_message, limited_history, user_persona)
+        
+        if check_feature_access(username, "markdown"):
+            rendered_response = render_markdown_simple(raw_response)
+        else:
+            rendered_response = raw_response
+        
+        save_user_history(username, "assistant", raw_response)
+        
+        track_user_action(username, "chat_message", {"persona": user_persona})
+        
+        return {
+            "reply": rendered_response,
+            "raw_reply": raw_response if check_feature_access(username, "tts") else None,
+            "subscription_tier": tier.value
+        }
+        
+    except Exception as e:
+        logger.error(f"Chat error for {username}: {str(e)}")
+        return {"reply": "Ein Fehler ist aufgetreten. Versuche es erneut."}
+
+@app.post("/chat/clear-history")
+async def clear_user_history_with_tracking(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    delete_user_history(username)
+    
+    track_user_action(username, "feature_used", {"feature": "clear_history"})
+    
+    logger.info(f"[USER] {username} hat seinen Chat-Verlauf gelöscht")
+    
+    return RedirectResponse("/chat", status_code=302)
+
+# ──────────────────────────────
+# Routes - Chat Export
+# ──────────────────────────────
+@app.get("/chat/export", response_class=HTMLResponse)
+async def export_chat_page(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    return templates.TemplateResponse("chat_export.html", {
+        "request": request,
+        "username": username,
+        "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+    })
+
+@app.post("/chat/export")
+async def export_chat_download(request: Request, 
+                              format: str = Form(...),
+                              csrf_token: str = Form(...)):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    if username != "admin":
+        toggle_user_block(username)
+        logger.info(f"[ADMIN] User blockiert/freigeschaltet: {username}")
+    
+    return RedirectResponse("/admin", status_code=302)
+
+@app.get("/admin/history/{username}", response_class=HTMLResponse)
+async def view_user_history(request: Request, username: str):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    history = get_user_history(username)
+    
+    formatted = "<br><br>".join(
+        f"<b>{html.escape(str(msg.get('role', 'unknown')))}:</b><br>{html.escape(str(msg.get('content', '')))}"
+        for msg in history
+    )
+    
+    body = f"""
+    <html><body style="font-family: Arial; padding: 20px;">
+    <h1>Chat-Verlauf von {html.escape(username)}</h1>
+    <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        {formatted or '— Kein Verlauf vorhanden —'}
+    </div>
+    <a href='/admin' style="color: blue;">🔙 Zurück zum Admin-Panel</a>
+    </body></html>
+    """
+    return HTMLResponse(body)
+
+@app.post("/admin/delete-history")
+async def delete_history(request: Request, 
+                        username: str = Form(...),
+                        csrf_token: str = Form(...)):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    delete_user_history(username)
+    logger.info(f"[ADMIN] Chat-Verlauf gelöscht: {username}")
+    
+    return RedirectResponse("/admin", status_code=302)
+
+@app.post("/admin/delete-user")
+async def delete_user(request: Request, 
+                     username: str = Form(...),
+                     csrf_token: str = Form(...)):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    if username != "admin":
+        delete_user_completely(username)
+        logger.info(f"[ADMIN] User gelöscht: {username}")
+    
+    return RedirectResponse("/admin", status_code=302)
+
+@app.post("/admin/change-user-password")
+async def change_user_password(request: Request, 
+                              username: str = Form(...), 
+                              new_password: str = Form(...),
+                              csrf_token: str = Form(...)):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    password_valid, password_msg = validate_password_strength(new_password)
+    if not password_valid:
+        users = get_all_users()
+        return templates.TemplateResponse("admin_users.html", {
+            "request": request,
+            "users": users,
+            "error": password_msg,
+            "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+        })
+    
+    if username != "admin":
+        reset_password(username, new_password)
+        logger.info(f"[ADMIN] Passwort geändert für: {username}")
+    
+    return RedirectResponse("/admin", status_code=302)
+
+@app.post("/admin/change-password")
+async def change_admin_password(request: Request, 
+                               old_password: str = Form(...), 
+                               new_password: str = Form(...),
+                               csrf_token: str = Form(...)):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    password_valid, password_msg = validate_password_strength(new_password)
+    if not password_valid:
+        users = get_all_users()
+        return templates.TemplateResponse("admin_users.html", {
+            "request": request,
+            "users": users,
+            "error": password_msg,
+            "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+        })
+    
+    admin_user = get_user("admin")
+    if admin_user and hmac.compare_digest(admin_user["password"], hash_password(old_password)):
+        reset_password("admin", new_password)
+        logger.info("[ADMIN] Admin-Passwort geändert")
+        return RedirectResponse("/admin", status_code=302)
+    else:
+        users = get_all_users()
+        return templates.TemplateResponse("admin_users.html", {
+            "request": request,
+            "users": users,
+            "error": "Altes Passwort ist falsch",
+            "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+        })
+
+@app.get("/admin/export-csv")
+async def export_csv():
+    users = get_all_users()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Benutzername", "Passwort-Hash", "Frage", "Antwort", "Admin", "Blockiert", "Subscription", "Theme"])
+    
+    for name, data in users.items():
+        writer.writerow([
+            name,
+            data.get("password", ""),
+            data.get("question", ""),
+            data.get("answer", ""),
+            "Ja" if data.get("is_admin") else "Nein",
+            "Ja" if data.get("blocked") else "Nein",
+            data.get("subscription", "free"),
+            data.get("theme", "dark")
+        ])
+    
+    output.seek(0)
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode("utf-8")),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=users.csv"}
+    )
+
+# ──────────────────────────────
+# API Routes - Session Info
+# ──────────────────────────────
+@app.get("/api/session-info")
+async def session_info(request: Request):
+    if not request.session.get("username"):
+        return {"active": False}
+    
+    last_activity = request.session.get("last_activity", time())
+    remaining_seconds = max(0, SESSION_TIMEOUT_SECONDS - (time() - last_activity))
+    username = request.session.get("username")
+    
+    return {
+        "active": True,
+        "username": username,
+        "remaining_minutes": int(remaining_seconds / 60),
+        "remaining_seconds": int(remaining_seconds),
+        "subscription_tier": get_user_subscription(username).value if username else "free",
+        "theme": get_user_theme(username) if username else "dark"
+    }
+
+# ──────────────────────────────
+# Middleware
+# ──────────────────────────────
+@app.middleware("http")
+async def add_template_context(request: Request, call_next):
+    response = await call_next(request)
+    
+    if request.session.get("username"):
+        username = request.session.get("username")
+        theme = get_user_theme(username)
+        if "csrf_token" not in request.session:
+            request.session["csrf_token"] = generate_csrf_token()
+    
+    return response
+
+# ──────────────────────────────
+# Startup Event
+# ──────────────────────────────
+@app.on_event("startup")
+def startup():
+    init_db()
+    init_api_keys_db()
+    logger.info("[STARTUP] KI-Chat mit allen Features gestartet")
+    logger.info("[STARTUP] Features: CSRF-Schutz, Chat-Export, Dark Mode, API-Keys in DB")
+    logger.info("[STARTUP] Subscription-Tiers, Analytics-System, Erweiterte Validierung")
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    try:
+        if format == "txt":
+            content = export_user_chat_txt(username)
+            return Response(
+                content=content.encode('utf-8'),
+                media_type="text/plain",
+                headers={"Content-Disposition": f"attachment; filename={username}_chat.txt"}
+            )
+        
+        elif format == "json":
+            content = json.dumps(export_user_chat_json(username), indent=2, ensure_ascii=False)
+            return Response(
+                content=content.encode('utf-8'),
+                media_type="application/json", 
+                headers={"Content-Disposition": f"attachment; filename={username}_chat.json"}
+            )
+        
+        elif format == "zip":
+            zip_data = create_user_export_package(username)
+            return Response(
+                content=zip_data,
+                media_type="application/zip",
+                headers={"Content-Disposition": f"attachment; filename={username}_export.zip"}
+            )
+    
+    except Exception as e:
+        logger.error(f"Export error for {username}: {str(e)}")
+        return templates.TemplateResponse("chat_export.html", {
+            "request": request,
+            "username": username,
+            "error": "Export fehlgeschlagen",
+            "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+        })
+
+# ──────────────────────────────
+# Routes - Theme Management
+# ──────────────────────────────
+@app.post("/settings/theme")
+async def change_theme(request: Request, theme: str = Form(...)):
+    redirect = require_active_session(request)
+    if redirect:
+        return {"success": False, "error": "Session expired"}
+    
+    username = request.session.get("username")
+    
+    if theme in ["dark", "light"]:
+        set_user_theme(username, theme)
+        
+        track_user_action(username, "feature_used", {"feature": "theme_change", "theme": theme})
+        
+        return {"success": True, "theme": theme}
+    
+    return {"success": False, "error": "Invalid theme"}
+
+# ──────────────────────────────
+# Routes - Persona (with Subscription)
+# ──────────────────────────────
+@app.get("/persona", response_class=HTMLResponse)
+async def persona_settings_with_subscription(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    current_persona = get_user_persona(username)
+    available_personas = get_available_personas(username)
+    tier = get_user_subscription(username)
+    theme = get_user_theme(username)
+    
+    return templates.TemplateResponse("persona.html", {
+        "request": request,
+        "username": username, 
+        "personas": available_personas,
+        "all_personas": PERSONAS,
+        "current_persona": current_persona,
+        "subscription_tier": tier.value,
+        "theme": theme,
+        "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+    })
+
+@app.post("/persona")
+async def set_persona_with_tracking(request: Request, 
+                                   persona: str = Form(...),
+                                   csrf_token: str = Form(...)):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    username = request.session.get("username")
+    available_personas = get_available_personas(username)
+    
+    if persona in available_personas:
+        save_user_persona(username, persona)
+        
+        track_user_action(username, "feature_used", {"feature": "persona_change", "persona": persona})
+        
+        logger.info(f"[PERSONA] {username} wählte Persona: {persona}")
+    
+    return RedirectResponse("/chat", status_code=302)
+
+# ──────────────────────────────
+# Routes - Subscription Management
+# ──────────────────────────────
+@app.get("/subscription", response_class=HTMLResponse)
+async def subscription_page(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    current_tier = get_user_subscription(username)
+    theme = get_user_theme(username)
+    
+    analytics = load_analytics()
+    user_data = analytics["users"].get(username, {})
+    
+    return templates.TemplateResponse("subscription.html", {
+        "request": request,
+        "username": username,
+        "current_tier": current_tier.value,
+        "limits": SUBSCRIPTION_LIMITS[current_tier],
+        "usage": {
+            "messages_today": user_data.get("messages_today", 0),
+            "total_messages": user_data.get("total_messages", 0),
+            "api_calls_today": user_data.get("api_calls_today", 0)
+        },
+        "tiers": {
+            "free": SUBSCRIPTION_LIMITS[SubscriptionTier.FREE],
+            "premium": SUBSCRIPTION_LIMITS[SubscriptionTier.PREMIUM], 
+            "enterprise": SUBSCRIPTION_LIMITS[SubscriptionTier.ENTERPRISE]
+        },
+        "theme": theme,
+        "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+    })
+
+@app.post("/subscription/upgrade")
+async def upgrade_subscription(request: Request, 
+                              tier: str = Form(...),
+                              csrf_token: str = Form(...)):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    username = request.session.get("username")
+    
+    try:
+        new_tier = SubscriptionTier(tier)
+    except ValueError:
+        return RedirectResponse("/subscription?error=invalid_tier", status_code=302)
+    
+    set_user_subscription(username, new_tier)
+    
+    track_user_action(username, "feature_used", {"feature": "subscription_upgrade", "tier": tier})
+    
+    logger.info(f"[SUBSCRIPTION] {username} upgraded to {tier}")
+    
+    return RedirectResponse("/subscription?success=upgraded", status_code=302)
+
+# ──────────────────────────────
+# Routes - API Management
+# ──────────────────────────────
+@app.post("/api/generate-key")
+async def generate_api_key_route_db(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Not authenticated", "status_code": 401}
+    
+    username = request.session.get("username")
+    
+    existing_keys = get_user_api_keys(username)
+    if len(existing_keys) >= 5:
+        return {"error": "Maximum number of API keys reached (5)", "status_code": 429}
+    
+    api_key = f"ki-chat-{uuid.uuid4().hex[:16]}"
+    
+    save_api_key_to_db(api_key, username)
+    
+    logger.info(f"[API] API-Key generiert für {username}")
+    
+    return {
+        "api_key": api_key,
+        "usage": "Füge 'X-API-Key: {api_key}' zu deinen Request-Headers hinzu",
+        "endpoints": {
+            "chat": "/api/v1/chat",
+            "models": "/api/v1/models", 
+            "usage": "/api/v1/usage"
+        },
+        "existing_keys": len(existing_keys) + 1
+    }
+
+@app.get("/api/keys", response_class=HTMLResponse)
+async def manage_api_keys(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    api_keys = get_user_api_keys(username)
+    theme = get_user_theme(username)
+    
+    return templates.TemplateResponse("api_keys.html", {
+        "request": request,
+        "username": username,
+        "api_keys": api_keys,
+        "theme": theme,
+        "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+    })
+
+@app.get("/api/v1/models")
+async def list_models(x_api_key: Optional[str] = Header(None)):
+    if not x_api_key or not validate_api_key_db(x_api_key):
+        return {"error": "Invalid API key", "status_code": 401}
+    
+    track_api_usage_db(x_api_key)
+    
+    return {
+        "models": [
+            {
+                "id": "llama3.2",
+                "name": "Llama 3.2",
+                "description": "Schnelles lokales Modell",
+                "max_tokens": 4096
+            },
+            {
+                "id": "gpt-3.5-turbo", 
+                "name": "GPT-3.5 Turbo",
+                "description": "OpenAI Modell (API-Key erforderlich)",
+                "max_tokens": 4096
+            }
+        ]
+    }
+
+@app.post("/api/v1/chat")
+async def api_chat_with_limits(
+    request: Request,
+    x_api_key: Optional[str] = Header(None)
+):
+    if not x_api_key:
+        return {"error": "API key required", "status_code": 401}
+    
+    user_info = validate_api_key_db(x_api_key)
+    if not user_info:
+        return {"error": "Invalid API key", "status_code": 401}
+    
+    username = user_info["username"]
+    
+    if not check_daily_limit(username, "api_calls"):
+        tier = get_user_subscription(username)
+        limit = SUBSCRIPTION_LIMITS[tier]["api_calls_per_day"]
+        return {
+            "error": f"Daily API limit exceeded ({limit} calls)",
+            "status_code": 429,
+            "upgrade_url": "/subscription"
+        }
+    
+    track_api_usage_db(x_api_key)
+    
+    data = await request.json()
+    message = data.get("message", "")
+    persona = data.get("persona", "standard")
+    model = data.get("model", "llama3.2")
+    include_context = data.get("include_context", True)
+    
+    if not message.strip():
+        return {"error": "Message cannot be empty", "status_code": 400}
+    
+    available_personas = get_available_personas(username)
+    if persona not in available_personas:
+        return {
+            "error": f"Persona '{persona}' not available in your subscription",
+            "available_personas": list(available_personas.keys()),
+            "status_code": 403
+        }
+    
+    try:
+        if include_context:
+            history = get_user_history(username)
+            tier = get_user_subscription(username)
+            max_context = SUBSCRIPTION_LIMITS[tier]["max_context_length"]
+            limited_history = history[-max_context*2:] if max_context > 0 else history
+            
+            response_text = get_response_with_context(message, limited_history, persona)
+            
+            save_user_history(username, "user", message)
+            save_user_history(username, "assistant", response_text)
+        else:
+            messages = [
+                {"role": "system", "content": PERSONAS.get(persona, PERSONAS["standard"])["system_prompt"]},
+                {"role": "user", "content": message}
+            ]
+            response_text = get_response_with_messages(messages)
+        
+        track_user_action(username, "api_call", {"persona": persona})
+        
+        return {
+            "message": response_text,
+            "model": model,
+            "persona": persona,
+            "tokens_used": len(response_text.split()),
+            "subscription_tier": get_user_subscription(username).value,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"[API] Error for {username}: {str(e)}")
+        return {"error": "Internal server error", "status_code": 500}
+
+@app.get("/api/v1/usage")
+async def api_usage_stats(x_api_key: Optional[str] = Header(None)):
+    if not x_api_key or not validate_api_key_db(x_api_key):
+        return {"error": "Invalid API key", "status_code": 401}
+    
+    user_info = validate_api_key_db(x_api_key)
+    username = user_info["username"]
+    tier = get_user_subscription(username)
+    
+    return {
+        "username": username,
+        "api_key": x_api_key[:8] + "...",
+        "requests_today": user_info["requests_today"],
+        "total_requests": user_info["total_requests"],
+        "subscription_tier": tier.value,
+        "created_at": user_info["created_at"],
+        "rate_limit": {
+            "requests_per_hour": MESSAGES_PER_HOUR,
+            "requests_per_day": SUBSCRIPTION_LIMITS[tier]["api_calls_per_day"]
+        }
+    }
+
+# ──────────────────────────────
+# Routes - Admin Panel (Extended)
+# ──────────────────────────────
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    users = get_all_users()
+    
+    total_users = len(users)
+    blocked_users = sum(1 for user in users.values() if user.get("blocked", False))
+    premium_users = sum(1 for user in users.values() if user.get("subscription", "free") != "free")
+    
+    return templates.TemplateResponse("admin_users.html", {
+        "request": request, 
+        "users": users,
+        "stats": {
+            "total_users": total_users,
+            "blocked_users": blocked_users,
+            "premium_users": premium_users,
+            "free_users": total_users - premium_users
+        },
+        "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+    })
+
+@app.post("/admin/set-subscription")
+async def admin_set_subscription(request: Request, 
+                                username: str = Form(...), 
+                                subscription: str = Form(...),
+                                csrf_token: str = Form(...)):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+    
+    try:
+        tier = SubscriptionTier(subscription)
+        set_user_subscription(username, tier)
+        logger.info(f"[ADMIN] Subscription für {username} auf {subscription} gesetzt")
+    except ValueError:
+        logger.error(f"[ADMIN] Ungültige Subscription: {subscription}")
+    
+    return RedirectResponse("/admin", status_code=302)
+
+@app.get("/admin/analytics", response_class=HTMLResponse)
+async def analytics_dashboard(request: Request):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    analytics = load_analytics()
+    
+    last_7_days = []
+    for i in range(7):
+        date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        last_7_days.append(date)
+    
+    daily_stats = []
+    for date in reversed(last_7_days):
+        day_data = analytics["daily"].get(date, {})
+        daily_stats.append({
+            "date": date,
+            "messages": day_data.get("total_messages", 0),
+            "users": len(day_data.get("unique_users", [])),
+            "top_persona": max(day_data.get("personas_used", {"standard": 0}).items(), 
+                              key=lambda x: x[1], default=("standard", 0))[0]
+        })
+    
+    top_users = sorted(
+        [(username, data["total_messages"]) for username, data in analytics["users"].items()],
+        key=lambda x: x[1], 
+        reverse=True
+    )[:10]
+    
+    return templates.TemplateResponse("analytics.html", {
+        "request": request,
+        "daily_stats": daily_stats,
+        "top_users": top_users,
+        "total_users": len(analytics["users"]),
+        "total_messages": sum(data["total_messages"] for data in analytics["users"].values()),
+        "personas_usage": analytics["daily"].get(datetime.now().strftime("%Y-%m-%d"), {}).get("personas_used", {}),
+        "csrf_token": request.session.get("csrf_token", generate_csrf_token())
+    })
+
+@app.post("/admin/toggle-block")
+async def toggle_block_user(request: Request, 
+                           username: str = Form(...),
+                           csrf_token: str = Form(...)):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if not verify_csrf_token(csrf_token, request.session.get("csrf_token")):from fastapi import FastAPI, Request, Form, HTTPException, Header
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
-from typing import Optional, List, Dict, Any
+from typing import Optional
 from enum import Enum
-from dataclasses import dataclass
 import os
 import logging
 import sqlite3
@@ -22,163 +1012,31 @@ import re
 import uuid
 import secrets
 import zipfile
-import asyncio
-import threading
-import queue
 from datetime import datetime, timedelta
-from time import time as time_now
-from collections import defaultdict, OrderedDict
+from time import time
+from collections import defaultdict
 
-# Optional imports with fallbacks
-try:
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
-    psutil = None
-
-try:
-    import magic
-    MAGIC_AVAILABLE = True
-except ImportError:
-    MAGIC_AVAILABLE = False
-    magic = None
-
-try:
-    from PIL import Image
-    PIL_AVAILABLE = True
-except ImportError:
-    PIL_AVAILABLE = False
-    Image = None
-
-try:
-    import PyPDF2
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF_AVAILABLE = False
-    PyPDF2 = None
-
-try:
-    import docx
-    DOCX_AVAILABLE = True
-except ImportError:
-    DOCX_AVAILABLE = False
-    docx = None
-
-# Conditional imports
-try:
-    import structlog
-    STRUCTLOG_AVAILABLE = True
-except ImportError:
-    STRUCTLOG_AVAILABLE = False
-    structlog = None
-
-from concurrent.futures import ThreadPoolExecutor
-import aiofiles
-import httpx
-
-# Import mit Error Handling
-try:
-    from ollama_chat import get_response, get_response_with_messages
-    OLLAMA_AVAILABLE = True
-except ImportError:
-    OLLAMA_AVAILABLE = False
-    def get_response(msg):
-        return "Ollama nicht verfügbar"
-    def get_response_with_messages(msgs):
-        return "Ollama nicht verfügbar"
+from ollama_chat import get_response, get_response_with_messages
 
 # ──────────────────────────────
-# Enhanced Configuration & Setup
+# Setup & Configuration
 # ──────────────────────────────
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
-MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", "10485760"))  # 10MB
-REDIS_URL = os.getenv("REDIS_URL", None)
 
-# Ensure directories exist
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs("logs", exist_ok=True)
-os.makedirs("static", exist_ok=True)
-os.makedirs("templates", exist_ok=True)
-
-app = FastAPI(title="KI-Chat Advanced", version="2.0.0")
+app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
-# Static files mit Error Handling
-try:
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-except Exception as e:
-    print(f"Warning: Could not mount static files: {e}")
-
-try:
-    app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-except Exception as e:
-    print(f"Warning: Could not mount upload files: {e}")
-
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# ──────────────────────────────
-# Enhanced Logging System (Fixed)
-# ──────────────────────────────
-def setup_structured_logging():
-    """Setup structured logging with fallback"""
-    if STRUCTLOG_AVAILABLE:
-        try:
-            structlog.configure(
-                processors=[
-                    structlog.processors.TimeStamper(fmt="ISO"),
-                    structlog.processors.add_log_level,
-                    structlog.processors.JSONRenderer()
-                ],
-                wrapper_class=structlog.stdlib.LoggerFactory(),
-                logger_factory=structlog.stdlib.LoggerFactory(),
-                context_class=dict,
-                cache_logger_on_first_use=True,
-            )
-        except Exception as e:
-            print(f"Structlog setup failed: {e}")
-    
-    # File handler for structured logs
-    try:
-        handler = logging.handlers.RotatingFileHandler(
-            "logs/app.json",
-            maxBytes=10485760,  # 10MB
-            backupCount=5
-        )
-        handler.setLevel(logging.INFO)
-        
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        
-        # Root logger setup
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.INFO)
-        root_logger.addHandler(handler)
-        root_logger.addHandler(console_handler)
-    except Exception as e:
-        print(f"Logging setup failed: {e}")
-
-setup_structured_logging()
-
-# Logger mit Fallback
-if STRUCTLOG_AVAILABLE:
-    try:
-        logger = structlog.get_logger("app")
-    except:
-        logger = logging.getLogger("app")
-else:
-    logger = logging.getLogger("app")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("app")
 
 # File paths
 DB_PATH = "users.db"
 RATE_LIMIT_FILE = "rate_limits.json"
 ANALYTICS_FILE = "analytics.json"
-SESSIONS_DB = "sessions.db"
-PERFORMANCE_LOG = "logs/performance.json"
 
 # Settings
 CHAT_TABLE_CREATED = False
@@ -186,1076 +1044,9 @@ MESSAGES_PER_HOUR = 50
 SESSION_TIMEOUT_MINUTES = 30
 SESSION_TIMEOUT_SECONDS = SESSION_TIMEOUT_MINUTES * 60
 
-# ──────────────────────────────
-# Performance Monitoring
-# ──────────────────────────────
-@dataclass
-class PerformanceMetrics:
-    endpoint: str
-    method: str
-    duration: float
-    status_code: int
-    timestamp: str
-    user: Optional[str] = None
-    db_queries: int = 0
-    cache_hits: int = 0
-    cache_misses: int = 0
+# API Key Management (deprecated - now in DB)
+API_KEYS = {}
 
-class PerformanceMonitor:
-    def __init__(self):
-        self.metrics = []
-        self.lock = threading.Lock()
-    
-    def record_metric(self, metric: PerformanceMetrics):
-        try:
-            with self.lock:
-                self.metrics.append(metric)
-                # Keep only last 1000 metrics
-                if len(self.metrics) > 1000:
-                    self.metrics = self.metrics[-1000:]
-        except Exception as e:
-            print(f"Error recording metric: {e}")
-    
-    def get_stats(self) -> Dict[str, Any]:
-        try:
-            with self.lock:
-                if not self.metrics:
-                    return {"total_requests": 0, "message": "No metrics available"}
-                
-                durations = [m.duration for m in self.metrics]
-                return {
-                    "total_requests": len(self.metrics),
-                    "avg_response_time": sum(durations) / len(durations),
-                    "max_response_time": max(durations),
-                    "min_response_time": min(durations),
-                    "endpoints": self._get_endpoint_stats(),
-                    "last_updated": datetime.now().isoformat()
-                }
-        except Exception as e:
-            return {"error": f"Stats error: {e}"}
-    
-    def _get_endpoint_stats(self):
-        try:
-            endpoint_stats = defaultdict(list)
-            for metric in self.metrics:
-                endpoint_stats[metric.endpoint].append(metric.duration)
-            
-            return {
-                endpoint: {
-                    "count": len(durations),
-                    "avg_time": sum(durations) / len(durations),
-                    "max_time": max(durations)
-                } for endpoint, durations in endpoint_stats.items()
-            }
-        except Exception as e:
-            return {"error": f"Endpoint stats error: {e}"}
-
-performance_monitor = PerformanceMonitor()
-
-# ──────────────────────────────
-# Enhanced Caching System
-# ──────────────────────────────
-class MemoryCache:
-    def __init__(self, max_size: int = 1000, ttl_seconds: int = 3600):
-        self.cache = OrderedDict()
-        self.timestamps = {}
-        self.max_size = max_size
-        self.ttl = ttl_seconds
-        self.lock = threading.Lock()
-        self.hits = 0
-        self.misses = 0
-    
-    def get(self, key: str) -> Optional[Any]:
-        try:
-            with self.lock:
-                if key not in self.cache:
-                    self.misses += 1
-                    return None
-                
-                # Check TTL
-                if time_now() - self.timestamps[key] > self.ttl:
-                    del self.cache[key]
-                    del self.timestamps[key]
-                    self.misses += 1
-                    return None
-                
-                # Move to end (LRU)
-                self.cache.move_to_end(key)
-                self.hits += 1
-                return self.cache[key]
-        except Exception as e:
-            print(f"Cache get error: {e}")
-            return None
-    
-    def set(self, key: str, value: Any):
-        try:
-            with self.lock:
-                if key in self.cache:
-                    del self.cache[key]
-                
-                self.cache[key] = value
-                self.timestamps[key] = time_now()
-                
-                # Remove oldest if over limit
-                while len(self.cache) > self.max_size:
-                    oldest_key = next(iter(self.cache))
-                    del self.cache[oldest_key]
-                    del self.timestamps[oldest_key]
-        except Exception as e:
-            print(f"Cache set error: {e}")
-    
-    def delete(self, key: str):
-        try:
-            with self.lock:
-                if key in self.cache:
-                    del self.cache[key]
-                    del self.timestamps[key]
-        except Exception as e:
-            print(f"Cache delete error: {e}")
-    
-    def clear(self):
-        try:
-            with self.lock:
-                self.cache.clear()
-                self.timestamps.clear()
-        except Exception as e:
-            print(f"Cache clear error: {e}")
-    
-    def stats(self):
-        try:
-            return {
-                "size": len(self.cache),
-                "max_size": self.max_size,
-                "hits": self.hits,
-                "misses": self.misses,
-                "hit_rate": self.hits / (self.hits + self.misses) if (self.hits + self.misses) > 0 else 0
-            }
-        except Exception as e:
-            return {"error": f"Cache stats error: {e}"}
-
-cache = MemoryCache()
-
-# ──────────────────────────────
-# Connection Pool Manager (Fixed)
-# ──────────────────────────────
-class DatabasePool:
-    def __init__(self, database_path: str, pool_size: int = 5):
-        self.database_path = database_path
-        self.pool_size = pool_size
-        self.pool = queue.Queue(maxsize=pool_size)
-        self.lock = threading.Lock()
-        self.active_connections = 0
-        
-        # Initialize pool with error handling
-        try:
-            for _ in range(pool_size):
-                conn = sqlite3.connect(database_path, check_same_thread=False, timeout=30.0)
-                conn.row_factory = sqlite3.Row
-                # Enable WAL mode for better concurrency
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA synchronous=NORMAL")
-                conn.execute("PRAGMA temp_store=MEMORY")
-                conn.execute("PRAGMA mmap_size=268435456")  # 256MB
-                self.pool.put(conn)
-        except Exception as e:
-            print(f"Database pool initialization error: {e}")
-            # Create at least one connection
-            try:
-                conn = sqlite3.connect(database_path, check_same_thread=False, timeout=30.0)
-                conn.row_factory = sqlite3.Row
-                self.pool.put(conn)
-            except Exception as e2:
-                print(f"Critical database error: {e2}")
-    
-    def get_connection(self) -> sqlite3.Connection:
-        try:
-            conn = self.pool.get_nowait()
-            return conn
-        except queue.Empty:
-            # Pool exhausted, create temporary connection
-            try:
-                with self.lock:
-                    self.active_connections += 1
-                conn = sqlite3.connect(self.database_path, check_same_thread=False, timeout=30.0)
-                conn.row_factory = sqlite3.Row
-                return conn
-            except Exception as e:
-                print(f"Database connection error: {e}")
-                raise HTTPException(status_code=500, detail="Database connection failed")
-    
-    def return_connection(self, conn: sqlite3.Connection):
-        try:
-            if conn:
-                # Reset connection state
-                conn.rollback()
-                self.pool.put_nowait(conn)
-        except queue.Full:
-            # Pool full, close connection
-            try:
-                conn.close()
-            except:
-                pass
-            with self.lock:
-                if self.active_connections > 0:
-                    self.active_connections -= 1
-        except Exception as e:
-            print(f"Error returning connection: {e}")
-            try:
-                conn.close()
-            except:
-                pass
-    
-    def close_all(self):
-        while not self.pool.empty():
-            try:
-                conn = self.pool.get()
-                conn.close()
-            except:
-                pass
-
-# Initialize database with error handling
-try:
-    db_pool = DatabasePool(DB_PATH)
-except Exception as e:
-    print(f"Database pool creation failed: {e}")
-    # Create a minimal fallback
-    db_pool = None
-
-# Context manager for database connections (Fixed)
-class DatabaseConnection:
-    def __init__(self, pool: DatabasePool):
-        self.pool = pool
-        self.conn = None
-    
-    def __enter__(self) -> sqlite3.Connection:
-        if self.pool is None:
-            # Fallback connection
-            self.conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
-            self.conn.row_factory = sqlite3.Row
-            return self.conn
-        
-        self.conn = self.pool.get_connection()
-        return self.conn
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.conn:
-            try:
-                if exc_type:
-                    self.conn.rollback()
-                else:
-                    self.conn.commit()
-                
-                if self.pool:
-                    self.pool.return_connection(self.conn)
-                else:
-                    self.conn.close()
-            except Exception as e:
-                print(f"Database context exit error: {e}")
-                try:
-                    self.conn.close()
-                except:
-                    pass
-
-# ──────────────────────────────
-# Background Task System
-# ──────────────────────────────
-class BackgroundTaskManager:
-    def __init__(self):
-        self.task_queue = queue.Queue()
-        self.executor = ThreadPoolExecutor(max_workers=3)
-        self.running = True
-        self.worker_thread = threading.Thread(target=self._worker, daemon=True)
-        self.worker_thread.start()
-    
-    def add_task(self, func, *args, **kwargs):
-        """Add a task to the background queue"""
-        try:
-            self.task_queue.put((func, args, kwargs))
-        except Exception as e:
-            print(f"Error adding background task: {e}")
-    
-    def _worker(self):
-        """Background worker thread"""
-        while self.running:
-            try:
-                func, args, kwargs = self.task_queue.get(timeout=1)
-                self.executor.submit(func, *args, **kwargs)
-                self.task_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception as e:
-                try:
-                    if hasattr(logger, 'error'):
-                        logger.error(f"Background task failed: {e}")
-                    else:
-                        print(f"Background task failed: {e}")
-                except:
-                    print(f"Background task failed: {e}")
-    
-    def shutdown(self):
-        self.running = False
-        self.executor.shutdown(wait=True)
-
-background_tasks = BackgroundTaskManager()
-
-# ──────────────────────────────
-# File Processing System (Fixed)
-# ──────────────────────────────
-class FileProcessor:
-    ALLOWED_TYPES = {
-        'image': ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
-        'document': ['application/pdf', 'text/plain', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-        'text': ['text/plain', 'text/markdown', 'text/csv']
-    }
-    
-    @staticmethod
-    async def process_file(file: UploadFile) -> Dict[str, Any]:
-        """Process uploaded file and extract content"""
-        try:
-            content = await file.read()
-            
-            # Detect file type (fallback if magic is not available)
-            if MAGIC_AVAILABLE and magic:
-                try:
-                    mime_type = magic.from_buffer(content, mime=True)
-                except Exception:
-                    mime_type = FileProcessor._get_mime_from_filename(file.filename)
-            else:
-                mime_type = FileProcessor._get_mime_from_filename(file.filename)
-            
-            result = {
-                'filename': file.filename,
-                'mime_type': mime_type,
-                'size': len(content),
-                'content': '',
-                'metadata': {},
-                'type': 'unknown'
-            }
-            
-            try:
-                if mime_type in FileProcessor.ALLOWED_TYPES['image']:
-                    result['content'] = await FileProcessor._process_image(content)
-                    result['type'] = 'image'
-                
-                elif mime_type in FileProcessor.ALLOWED_TYPES['document']:
-                    result['content'] = await FileProcessor._process_document(content, mime_type)
-                    result['type'] = 'document'
-                
-                elif mime_type in FileProcessor.ALLOWED_TYPES['text']:
-                    result['content'] = content.decode('utf-8', errors='ignore')
-                    result['type'] = 'text'
-                
-                else:
-                    result['error'] = f"Unsupported file type: {mime_type}"
-            
-            except Exception as e:
-                result['error'] = str(e)
-            
-            return result
-            
-        except Exception as e:
-            return {
-                'filename': getattr(file, 'filename', 'unknown'),
-                'error': f"File processing failed: {str(e)}",
-                'type': 'error'
-            }
-    
-    @staticmethod
-    def _get_mime_from_filename(filename: str) -> str:
-        """Get MIME type from filename extension"""
-        if not filename:
-            return 'application/octet-stream'
-            
-        filename_lower = filename.lower()
-        if filename_lower.endswith(('.jpg', '.jpeg')):
-            return 'image/jpeg'
-        elif filename_lower.endswith('.png'):
-            return 'image/png'
-        elif filename_lower.endswith('.gif'):
-            return 'image/gif'
-        elif filename_lower.endswith('.webp'):
-            return 'image/webp'
-        elif filename_lower.endswith('.pdf'):
-            return 'application/pdf'
-        elif filename_lower.endswith('.docx'):
-            return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        elif filename_lower.endswith('.txt'):
-            return 'text/plain'
-        elif filename_lower.endswith('.csv'):
-            return 'text/csv'
-        elif filename_lower.endswith('.md'):
-            return 'text/markdown'
-        else:
-            return 'application/octet-stream'
-    
-    @staticmethod
-    async def _process_image(content: bytes) -> str:
-        """Process image file"""
-        if not PIL_AVAILABLE or not Image:
-            return "Bildverarbeitung nicht verfügbar (PIL nicht installiert)"
-            
-        try:
-            with Image.open(io.BytesIO(content)) as img:
-                return f"Bild analysiert: {img.format} Format, Größe: {img.size[0]}x{img.size[1]} Pixel. Bereit für KI-Analyse."
-        except Exception as e:
-            return f"Fehler beim Verarbeiten des Bildes: {str(e)}"
-    
-    @staticmethod
-    async def _process_document(content: bytes, mime_type: str) -> str:
-        """Extract text from document files"""
-        try:
-            if mime_type == 'application/pdf':
-                if not PDF_AVAILABLE or not PyPDF2:
-                    return "PDF-Verarbeitung nicht verfügbar (PyPDF2 nicht installiert)"
-                
-                try:
-                    pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
-                    text = ""
-                    for page in pdf_reader.pages:
-                        text += page.extract_text() + "\n"
-                    return text if text.strip() else "Kein Text im PDF gefunden"
-                except Exception as e:
-                    return f"Fehler beim PDF lesen: {str(e)}"
-            
-            elif mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-                if not DOCX_AVAILABLE or not docx:
-                    return "DOCX-Verarbeitung nicht verfügbar (python-docx nicht installiert)"
-                
-                try:
-                    doc = docx.Document(io.BytesIO(content))
-                    text = ""
-                    for paragraph in doc.paragraphs:
-                        text += paragraph.text + "\n"
-                    return text if text.strip() else "Kein Text im DOCX gefunden"
-                except Exception as e:
-                    return f"Fehler beim DOCX lesen: {str(e)}"
-            
-            elif mime_type == 'text/plain':
-                return content.decode('utf-8', errors='ignore')
-            
-            else:
-                return f"Dokumenttyp {mime_type} wird nicht unterstützt"
-                
-        except Exception as e:
-            return f"Fehler beim Verarbeiten des Dokuments: {str(e)}"
-
-# ──────────────────────────────
-# Multiple AI Models Support (Fixed)
-# ──────────────────────────────
-class AIModelManager:
-    def __init__(self):
-        self.models = {
-            'ollama': {
-                'name': 'Llama 3.2 (Local)',
-                'description': 'Schnelles lokales Modell via Ollama',
-                'available': OLLAMA_AVAILABLE,
-                'cost_per_1k': 0,
-                'max_tokens': 4096
-            },
-            'openai-gpt-3.5': {
-                'name': 'GPT-3.5 Turbo',
-                'description': 'OpenAI GPT-3.5 Turbo Modell',
-                'available': bool(OPENAI_API_KEY),
-                'cost_per_1k': 0.002,
-                'max_tokens': 4096
-            },
-            'openai-gpt-4': {
-                'name': 'GPT-4',
-                'description': 'OpenAI GPT-4 Modell (Premium)',
-                'available': bool(OPENAI_API_KEY),
-                'cost_per_1k': 0.03,
-                'max_tokens': 8192
-            }
-        }
-    
-    async def get_response(self, messages: List[Dict], model: str = 'ollama', **kwargs) -> str:
-        """Get response from specified AI model"""
-        if model not in self.models or not self.models[model]['available']:
-            model = 'ollama'  # Fallback
-        
-        try:
-            if model == 'ollama':
-                if OLLAMA_AVAILABLE:
-                    return get_response_with_messages(messages)
-                else:
-                    return "Ollama ist nicht verfügbar. Bitte installieren Sie Ollama oder verwenden Sie ein anderes Modell."
-            
-            elif model.startswith('openai'):
-                return await self._get_openai_response(messages, model, **kwargs)
-            
-            else:
-                raise ValueError(f"Unknown model: {model}")
-        
-        except Exception as e:
-            error_msg = f"AI model error ({model}): {str(e)}"
-            try:
-                if hasattr(logger, 'error'):
-                    logger.error(error_msg, model=model, error=str(e))
-                else:
-                    print(error_msg)
-            except:
-                print(error_msg)
-            
-            # Fallback to ollama if possible
-            if model != 'ollama' and OLLAMA_AVAILABLE:
-                try:
-                    return await self.get_response(messages, 'ollama', **kwargs)
-                except:
-                    pass
-            
-            return f"Fehler bei der KI-Antwort: {str(e)}"
-    
-    async def _get_openai_response(self, messages: List[Dict], model: str, **kwargs) -> str:
-        """Get response from OpenAI API"""
-        if not OPENAI_API_KEY:
-            raise ValueError("OpenAI API Key nicht konfiguriert")
-            
-        model_name = "gpt-3.5-turbo" if "3.5" in model else "gpt-4"
-        
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        data = {
-            "model": model_name,
-            "messages": messages,
-            "max_tokens": kwargs.get('max_tokens', 1000),
-            "temperature": kwargs.get('temperature', 0.7)
-        }
-        
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers=headers,
-                    json=data
-                )
-                
-                if response.status_code != 200:
-                    error_detail = f"OpenAI API error: {response.status_code}"
-                    try:
-                        error_detail += f" - {response.json()}"
-                    except:
-                        error_detail += f" - {response.text}"
-                    raise HTTPException(status_code=response.status_code, detail=error_detail)
-                
-                result = response.json()
-                return result["choices"][0]["message"]["content"]
-        
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="OpenAI API Timeout")
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=503, detail=f"OpenAI API connection error: {str(e)}")
-    
-    def get_available_models(self, subscription_tier: str = 'free') -> Dict:
-        """Get available models based on subscription"""
-        available = {}
-        for model_id, model_info in self.models.items():
-            if not model_info['available']:
-                continue
-            
-            # Free users only get ollama
-            if subscription_tier == 'free' and model_id != 'ollama':
-                continue
-            
-            # Premium users get all except GPT-4
-            if subscription_tier == 'premium' and model_id == 'openai-gpt-4':
-                continue
-            
-            available[model_id] = model_info
-        
-        return available
-
-ai_models = AIModelManager()
-
-# ──────────────────────────────
-# Enhanced Search System
-# ──────────────────────────────
-class ChatSearchEngine:
-    def __init__(self):
-        self.stop_words = {'der', 'die', 'und', 'in', 'den', 'von', 'zu', 'das', 'mit', 'sich', 'des', 'auf', 'für', 'ist', 'im', 'dem', 'nicht', 'ein', 'eine', 'als', 'auch', 'es', 'an', 'werden', 'aus', 'er', 'hat', 'dass', 'sie', 'nach', 'wird', 'bei', 'einer', 'um', 'am', 'sind', 'noch', 'wie', 'einem', 'über', 'einen', 'so', 'zum', 'war', 'haben', 'nur', 'oder', 'aber', 'vor', 'zur', 'bis', 'mehr', 'durch', 'man', 'sein', 'wurde', 'sei', 'seit'}
-    
-    def search_messages(self, username: str, query: str, limit: int = 50) -> List[Dict]:
-        """Search through user's chat history"""
-        try:
-            query_terms = self._process_query(query)
-            if not query_terms:
-                return []
-            
-            with DatabaseConnection(db_pool) as conn:
-                cursor = conn.cursor()
-                
-                # Build search query
-                placeholders = ' OR '.join(['content LIKE ?' for _ in query_terms])
-                like_terms = [f'%{term}%' for term in query_terms]
-                
-                cursor.execute(f"""
-                    SELECT role, content, timestamp, 
-                           CASE 
-                               WHEN {placeholders} THEN 1 
-                               ELSE 0 
-                           END as relevance
-                    FROM chat_history 
-                    WHERE username = ? AND ({placeholders})
-                    ORDER BY relevance DESC, timestamp DESC
-                    LIMIT ?
-                """, [username] + like_terms + like_terms + [limit])
-                
-                results = []
-                for row in cursor.fetchall():
-                    results.append({
-                        'role': row['role'],
-                        'content': row['content'],
-                        'timestamp': row['timestamp'],
-                        'relevance': row['relevance'],
-                        'snippet': self._create_snippet(row['content'], query_terms)
-                    })
-                
-                return results
-                
-        except Exception as e:
-            print(f"Search error: {e}")
-            return []
-    
-    def _process_query(self, query: str) -> List[str]:
-        """Process search query into terms"""
-        try:
-            # Remove special characters and convert to lowercase
-            query = re.sub(r'[^\w\s]', ' ', query.lower())
-            terms = query.split()
-            
-            # Remove stop words and short terms
-            terms = [term for term in terms if term not in self.stop_words and len(term) > 2]
-            
-            return terms[:10]  # Limit to 10 terms
-            
-        except Exception as e:
-            print(f"Query processing error: {e}")
-            return []
-    
-    def _create_snippet(self, content: str, query_terms: List[str]) -> str:
-        """Create a snippet highlighting query terms"""
-        try:
-            if not content or not query_terms:
-                return content[:200] + "..." if len(content) > 200 else content
-                
-            content_lower = content.lower()
-            
-            # Find first occurrence of any query term
-            first_pos = len(content)
-            for term in query_terms:
-                pos = content_lower.find(term)
-                if pos != -1 and pos < first_pos:
-                    first_pos = pos
-            
-            # Create snippet around first occurrence
-            start = max(0, first_pos - 50)
-            end = min(len(content), first_pos + 150)
-            snippet = content[start:end]
-            
-            # Add ellipsis if truncated
-            if start > 0:
-                snippet = "..." + snippet
-            if end < len(content):
-                snippet = snippet + "..."
-            
-            # Highlight query terms
-            for term in query_terms:
-                try:
-                    pattern = re.compile(re.escape(term), re.IGNORECASE)
-                    snippet = pattern.sub(f'<mark>{term}</mark>', snippet)
-                except Exception:
-                    continue
-            
-            return snippet
-            
-        except Exception as e:
-            print(f"Snippet creation error: {e}")
-            return content[:200] + "..." if len(content) > 200 else content
-
-search_engine = ChatSearchEngine()
-
-# ──────────────────────────────
-# Conversation Threading System (Fixed)
-# ──────────────────────────────
-def init_conversations_db():
-    """Initialize conversation threading database"""
-    try:
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id TEXT PRIMARY KEY,
-                    username TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    message_count INTEGER DEFAULT 0,
-                    is_archived BOOLEAN DEFAULT 0
-                )
-            """)
-            
-            # Check if chat_history table exists
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_history'")
-            if cursor.fetchone():
-                # Add conversation_id to chat_history if not exists
-                cursor.execute("PRAGMA table_info(chat_history)")
-                columns = [column[1] for column in cursor.fetchall()]
-                
-                if 'conversation_id' not in columns:
-                    cursor.execute("ALTER TABLE chat_history ADD COLUMN conversation_id TEXT")
-                    
-                    # Create default conversation for existing messages
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO conversations (id, username, title)
-                        SELECT DISTINCT 'default_' || username, username, 'Hauptunterhaltung'
-                        FROM chat_history
-                        WHERE username IS NOT NULL
-                    """)
-                    
-                    # Assign existing messages to default conversation
-                    cursor.execute("""
-                        UPDATE chat_history SET conversation_id = 'default_' || username
-                        WHERE conversation_id IS NULL AND username IS NOT NULL
-                    """)
-    except Exception as e:
-        print(f"Error initializing conversations database: {e}")
-
-def create_conversation(username: str, title: str = None) -> str:
-    """Create a new conversation thread"""
-    try:
-        conversation_id = f"conv_{uuid.uuid4().hex[:12]}"
-        title = title or f"Unterhaltung {datetime.now().strftime('%d.%m. %H:%M')}"
-        
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO conversations (id, username, title)
-                VALUES (?, ?, ?)
-            """, (conversation_id, username, title))
-        
-        return conversation_id
-    except Exception as e:
-        print(f"Error creating conversation: {e}")
-        return f"default_{username}"
-
-def get_user_conversations(username: str) -> List[Dict]:
-    """Get all conversations for a user"""
-    try:
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, title, created_at, last_activity, message_count, is_archived
-                FROM conversations
-                WHERE username = ? AND is_archived = 0
-                ORDER BY last_activity DESC
-            """, (username,))
-            
-            return [dict(row) for row in cursor.fetchall()]
-    except Exception as e:
-        print(f"Error getting conversations: {e}")
-        return []
-
-# ──────────────────────────────
-# Database Initialization (Fixed)
-# ──────────────────────────────
-def init_database():
-    """Initialize all database tables"""
-    try:
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            
-            # Users table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL,
-                    email TEXT UNIQUE,
-                    password_hash TEXT NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    last_login DATETIME,
-                    is_active BOOLEAN DEFAULT 1,
-                    subscription_tier TEXT DEFAULT 'free'
-                )
-            """)
-            
-            # Chat history table
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS chat_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    conversation_id TEXT,
-                    FOREIGN KEY (username) REFERENCES users (username)
-                )
-            """)
-            
-            # Create indexes for better performance
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_username ON chat_history(username)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_history(timestamp)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_conversation ON chat_history(conversation_id)")
-            
-        # Initialize conversations
-        init_conversations_db()
-        
-        print("Database initialized successfully")
-        
-    except Exception as e:
-        print(f"Database initialization error: {e}")
-
-# Initialize database on startup
-init_database()
-
-# ──────────────────────────────
-# Performance Monitoring Middleware (Fixed)
-# ──────────────────────────────
-class PerformanceMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        start_time = time_now()
-        
-        # Get user for metrics
-        user = None
-        try:
-            if hasattr(request, 'session') and request.session and 'username' in request.session:
-                user = request.session['username']
-        except Exception:
-            pass
-        
-        response = await call_next(request)
-        
-        duration = time_now() - start_time
-        
-        # Record performance metric
-        try:
-            metric = PerformanceMetrics(
-                endpoint=str(request.url.path),
-                method=request.method,
-                duration=duration,
-                status_code=response.status_code,
-                timestamp=datetime.now().isoformat(),
-                user=user
-            )
-            
-            # Log slow requests
-            if duration > 1.0:
-                try:
-                    if hasattr(logger, 'warning'):
-                        logger.warning("Slow request", 
-                                      endpoint=metric.endpoint, 
-                                      duration=duration,
-                                      user=user)
-                    else:
-                        print(f"Slow request: {metric.endpoint} took {duration:.3f}s")
-                except:
-                    print(f"Slow request: {metric.endpoint} took {duration:.3f}s")
-            
-            performance_monitor.record_metric(metric)
-            
-            # Add performance headers
-            response.headers["X-Response-Time"] = f"{duration:.3f}"
-            
-        except Exception as e:
-            print(f"Performance monitoring error: {e}")
-        
-        return response
-
-app.add_middleware(PerformanceMiddleware)
-
-# ──────────────────────────────
-# Basic Routes for Testing
-# ──────────────────────────────
-@app.get("/")
-async def root():
-    """Root endpoint for testing"""
-    return {"message": "KI-Chat Advanced is running", "status": "ok"}
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    try:
-        # Test database connection
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-        
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "timestamp": datetime.now().isoformat(),
-            "models": {
-                "ollama": OLLAMA_AVAILABLE,
-                "openai": bool(OPENAI_API_KEY)
-            }
-        }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-@app.get("/stats")
-async def get_stats():
-    """Get performance statistics"""
-    try:
-        return {
-            "performance": performance_monitor.get_stats(),
-            "cache": cache.stats(),
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        return {"error": f"Stats error: {e}"}
-
-# ──────────────────────────────
-# Error Handlers
-# ──────────────────────────────
-from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle all unhandled exceptions"""
-    try:
-        if hasattr(logger, 'error'):
-            logger.error("Unhandled exception", 
-                        path=str(request.url.path),
-                        method=request.method,
-                        error=str(exc))
-        else:
-            print(f"Unhandled exception at {request.url.path}: {exc}")
-    except:
-        print(f"Unhandled exception: {exc}")
-    
-    return JSONResponse(
-        status_code=500,
-        content={
-            "detail": "Internal server error",
-            "error": str(exc),
-            "path": str(request.url.path)
-        }
-    )
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions"""
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "detail": exc.detail,
-            "path": str(request.url.path)
-        }
-    )
-
-# ──────────────────────────────
-# Startup and Shutdown Events
-# ──────────────────────────────
-@app.on_event("startup")
-async def startup_event():
-    """Application startup"""
-    try:
-        print("Starting KI-Chat Advanced...")
-        print(f"Ollama available: {OLLAMA_AVAILABLE}")
-        print(f"OpenAI available: {bool(OPENAI_API_KEY)}")
-        print(f"PIL available: {PIL_AVAILABLE}")
-        print(f"PDF available: {PDF_AVAILABLE}")
-        print(f"DOCX available: {DOCX_AVAILABLE}")
-        print("Application started successfully")
-    except Exception as e:
-        print(f"Startup error: {e}")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Application shutdown"""
-    try:
-        print("Shutting down KI-Chat Advanced...")
-        background_tasks.shutdown()
-        if db_pool:
-            db_pool.close_all()
-        print("Application shut down successfully")
-    except Exception as e:
-        print(f"Shutdown error: {e}")
-
-# ──────────────────────────────
-# Additional utility functions
-# ──────────────────────────────
-def ensure_chat_table():
-    """Ensure chat_history table exists"""
-    global CHAT_TABLE_CREATED
-    if CHAT_TABLE_CREATED:
-        return
-    
-    try:
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS chat_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    conversation_id TEXT
-                )
-            """)
-        CHAT_TABLE_CREATED = True
-    except Exception as e:
-        print(f"Error creating chat table: {e}")
-
-def save_message_to_db(username: str, role: str, content: str, conversation_id: str = None):
-    """Save a message to the database"""
-    try:
-        ensure_chat_table()
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO chat_history (username, role, content, conversation_id)
-                VALUES (?, ?, ?, ?)
-            """, (username, role, content, conversation_id))
-    except Exception as e:
-        print(f"Error saving message to database: {e}")
-
-def get_chat_history(username: str, conversation_id: str = None, limit: int = 50) -> List[Dict]:
-    """Get chat history for a user"""
-    try:
-        ensure_chat_table()
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            
-            if conversation_id:
-                cursor.execute("""
-                    SELECT role, content, timestamp FROM chat_history 
-                    WHERE username = ? AND conversation_id = ?
-                    ORDER BY timestamp DESC LIMIT ?
-                """, (username, conversation_id, limit))
-            else:
-                cursor.execute("""
-                    SELECT role, content, timestamp FROM chat_history 
-                    WHERE username = ?
-                    ORDER BY timestamp DESC LIMIT ?
-                """, (username, limit))
-            
-            messages = []
-            for row in cursor.fetchall():
-                messages.append({
-                    'role': row['role'],
-                    'content': row['content'],
-                    'timestamp': row['timestamp']
-                })
-            
-            return list(reversed(messages))  # Return in chronological order
-            
-    except Exception as e:
-        print(f"Error getting chat history: {e}")
-        return []
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
 # ──────────────────────────────
 # Subscription System
 # ──────────────────────────────
@@ -1310,7 +1101,7 @@ SUBSCRIPTION_LIMITS = {
         "messages_per_day": 500,
         "api_calls_per_day": 1000,
         "personas": list(PERSONAS.keys()),
-        "features": ["basic_chat", "history", "tts", "export", "advanced_personas", "markdown", "file_upload"],
+        "features": ["basic_chat", "history", "tts", "export", "advanced_personas", "markdown"],
         "max_context_length": 20
     },
     SubscriptionTier.ENTERPRISE: {
@@ -1323,99 +1114,99 @@ SUBSCRIPTION_LIMITS = {
 }
 
 # ──────────────────────────────
+# CSRF Protection
+# ──────────────────────────────
+def generate_csrf_token():
+    """Generiert CSRF-Token für Templates"""
+    return secrets.token_urlsafe(32)
+
+def verify_csrf_token(request_token: str, session_token: str) -> bool:
+    """Verifiziert CSRF-Token"""
+    return request_token == session_token and session_token is not None
+
+# ──────────────────────────────
 # Database Helper Functions
 # ──────────────────────────────
 def init_db():
-    """Initialize database with all necessary tables"""
+    """Initialisiert die Datenbank mit allen nötigen Tabellen"""
     global CHAT_TABLE_CREATED
     
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        
-        # Users table (extended with subscription and theme)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                password TEXT NOT NULL,
-                question TEXT NOT NULL,
-                answer TEXT NOT NULL,
-                is_admin INTEGER DEFAULT 0,
-                is_blocked INTEGER DEFAULT 0,
-                persona TEXT DEFAULT 'standard',
-                subscription TEXT DEFAULT 'free',
-                theme TEXT DEFAULT 'light'
-            )
-        """)
-        
-        # Chat history table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS chat_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                conversation_id TEXT,
-                FOREIGN KEY (username) REFERENCES users (username)
-            )
-        """)
-        
-        # API Keys table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS api_keys (
-                api_key TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                requests_today INTEGER DEFAULT 0,
-                total_requests INTEGER DEFAULT 0,
-                last_used DATETIME DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT 1,
-                FOREIGN KEY (username) REFERENCES users (username)
-            )
-        """)
-        
-        # Sessions table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                data TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                last_activity DATETIME DEFAULT CURRENT_TIMESTAMP,
-                expires_at DATETIME NOT NULL
-            )
-        """)
-        
-        # Admin user creation
-        cursor.execute("SELECT username FROM users WHERE username = ?", ("admin",))
-        if not cursor.fetchone():
-            admin_hash = hash_password("admin")
-            cursor.execute("""
-                INSERT INTO users (username, password, question, answer, is_admin, subscription) 
-                VALUES (?, ?, ?, ?, 1, 'enterprise')
-            """, ("admin", admin_hash, "Default Admin Question", "admin"))
-            logger.info("[INIT] Admin user created (admin/admin)")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
+    # Users-Tabelle (erweitert mit subscription und theme)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            password TEXT NOT NULL,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            is_admin INTEGER DEFAULT 0,
+            is_blocked INTEGER DEFAULT 0,
+            persona TEXT DEFAULT 'standard',
+            subscription TEXT DEFAULT 'free',
+            theme TEXT DEFAULT 'dark'
+        )
+    """)
+    
+    # Chat-Verlauf Tabelle
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (username) REFERENCES users (username)
+        )
+    """)
+    
+    # Admin-User erstellen falls nicht existiert
+    cursor.execute("SELECT username FROM users WHERE username = ?", ("admin",))
+    if not cursor.fetchone():
+        admin_hash = hash_password("admin")
+        cursor.execute("""
+            INSERT INTO users (username, password, question, answer, is_admin, subscription) 
+            VALUES (?, ?, ?, ?, 1, 'enterprise')
+        """, ("admin", admin_hash, "Default Admin Question", "admin"))
+        logger.info("[INIT] Admin-User erstellt (admin/admin)")
+    
+    conn.commit()
+    conn.close()
     CHAT_TABLE_CREATED = True
-    logger.info("[INIT] Database initialized")
+    logger.info("[INIT] Datenbank initialisiert")
+
+def init_api_keys_db():
+    """Erstellt API-Keys Tabelle in Datenbank"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            api_key TEXT UNIQUE NOT NULL,
+            username TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_used DATETIME,
+            requests_today INTEGER DEFAULT 0,
+            total_requests INTEGER DEFAULT 0,
+            is_active BOOLEAN DEFAULT 1,
+            FOREIGN KEY (username) REFERENCES users (username)
+        )
+    """)
+    
+    conn.commit()
+    conn.close()
 
 def hash_password(password: str) -> str:
-    """Hash password"""
+    """Passwort hashen"""
     return hashlib.sha256(password.encode()).hexdigest()
 
-def generate_csrf_token() -> str:
-    """Generate CSRF token"""
-    return secrets.token_urlsafe(32)
-
-def verify_csrf_token(token: str, session_token: str) -> bool:
-    """Verify CSRF token"""
-    return hmac.compare_digest(token, session_token)
-
 def render_markdown_simple(text: str) -> str:
-    """Simple markdown rendering for chat messages"""
+    """Einfaches Markdown-Rendering für Chat-Nachrichten"""
     text = html.escape(text)
     
-    # Code blocks (```code```)
+    # Code-Blöcke (```code```)
     text = re.sub(
         r'```(\w+)?\n?(.*?)```', 
         r'<div class="code-block"><div class="code-header">\1</div><pre><code>\2</code></pre></div>', 
@@ -1423,16 +1214,16 @@ def render_markdown_simple(text: str) -> str:
         flags=re.DOTALL
     )
     
-    # Inline code (`code`)
+    # Inline-Code (`code`)
     text = re.sub(r'`([^`]+)`', r'<code class="inline-code">\1</code>', text)
     
-    # Bold (**text**)
+    # Fett (**text**)
     text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
     
-    # Italic (*text*)
+    # Kursiv (*text*)
     text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
     
-    # Lists (- item)
+    # Listen (- item)
     lines = text.split('\n')
     in_list = False
     result_lines = []
@@ -1461,25 +1252,21 @@ def render_markdown_simple(text: str) -> str:
         text
     )
     
-    # Line breaks
+    # Zeilenumbrüche
     text = text.replace('\n', '<br>')
     
     return text
 
 def get_user(username: str) -> dict:
-    """Get user from database"""
-    cache_key = f"user_{username}"
-    cached_user = cache.get(cache_key)
-    if cached_user:
-        return cached_user
-    
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-        row = cursor.fetchone()
+    """User aus DB holen"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    conn.close()
     
     if row:
-        user_data = {
+        return {
             "username": row[0],
             "password": row[1],
             "question": row[2],
@@ -1488,19 +1275,17 @@ def get_user(username: str) -> dict:
             "is_blocked": bool(row[5]),
             "persona": row[6] if len(row) > 6 else "standard",
             "subscription": row[7] if len(row) > 7 else "free",
-            "theme": row[8] if len(row) > 8 else "light"
+            "theme": row[8] if len(row) > 8 else "dark"
         }
-        cache.set(cache_key, user_data)
-        return user_data
-    
     return None
 
 def get_all_users() -> dict:
-    """Get all users for admin panel"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users")
-        rows = cursor.fetchall()
+    """Alle User für Admin-Panel"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users")
+    rows = cursor.fetchall()
+    conn.close()
     
     users = {}
     for row in rows:
@@ -1511,112 +1296,206 @@ def get_all_users() -> dict:
             "is_admin": bool(row[4]),
             "blocked": bool(row[5]),
             "subscription": row[7] if len(row) > 7 else "free",
-            "theme": row[8] if len(row) > 8 else "light"
+            "theme": row[8] if len(row) > 8 else "dark"
         }
     return users
 
 def save_user(username: str, password: str, question: str, answer: str) -> bool:
-    """Register new user"""
+    """Neuen User registrieren"""
     if get_user(username):
         return False
     
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        try:
-            password_hash = hash_password(password)
-            cursor.execute("""
-                INSERT INTO users (username, password, question, answer) 
-                VALUES (?, ?, ?, ?)
-            """, (username, password_hash, question, answer))
-            logger.info(f"[REGISTER] New user: {username}")
-            return True
-        except sqlite3.IntegrityError:
-            return False
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        password_hash = hash_password(password)
+        cursor.execute("""
+            INSERT INTO users (username, password, question, answer) 
+            VALUES (?, ?, ?, ?)
+        """, (username, password_hash, question, answer))
+        conn.commit()
+        logger.info(f"[REGISTER] Neuer User: {username}")
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
 
 def check_login(username: str, password: str) -> bool:
-    """Check login credentials"""
+    """Login überprüfen"""
     user = get_user(username)
     if user:
         return user["password"] == hash_password(password)
     return False
 
 def verify_security_answer(username: str, answer: str) -> bool:
-    """Verify security answer"""
+    """Sicherheitsantwort prüfen"""
     user = get_user(username)
     if user:
         return user["answer"] == answer
     return False
 
 def reset_password(username: str, new_password: str):
-    """Reset password"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        password_hash = hash_password(new_password)
-        cursor.execute("UPDATE users SET password = ? WHERE username = ?", 
-                       (password_hash, username))
-    
-    # Clear user from cache
-    cache.delete(f"user_{username}")
+    """Passwort zurücksetzen"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    password_hash = hash_password(new_password)
+    cursor.execute("UPDATE users SET password = ? WHERE username = ?", 
+                   (password_hash, username))
+    conn.commit()
+    conn.close()
 
-def get_user_history(username: str, conversation_id: str = None) -> list:
-    """Get chat history from database"""
+def get_user_history(username: str) -> list:
+    """Chat-Verlauf aus DB laden"""
     if not CHAT_TABLE_CREATED:
         return []
     
-    cache_key = f"history_{username}_{conversation_id or 'default'}"
-    cached_history = cache.get(cache_key)
-    if cached_history:
-        return cached_history
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT role, content, timestamp FROM chat_history 
+        WHERE username = ? ORDER BY timestamp ASC
+    """, (username,))
+    rows = cursor.fetchall()
+    conn.close()
     
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        if conversation_id:
-            cursor.execute("""
-                SELECT role, content, timestamp FROM chat_history 
-                WHERE username = ? AND conversation_id = ?
-                ORDER BY timestamp ASC
-            """, (username, conversation_id))
-        else:
-            cursor.execute("""
-                SELECT role, content, timestamp FROM chat_history 
-                WHERE username = ? ORDER BY timestamp ASC
-            """, (username,))
-        
-        rows = cursor.fetchall()
-    
-    history = [{"role": row[0], "content": row[1], "timestamp": row[2]} for row in rows]
-    cache.set(cache_key, history, 300)  # Cache for 5 minutes
-    return history
+    return [{"role": row[0], "content": row[1], "timestamp": row[2]} for row in rows]
 
-def save_user_history(username: str, role: str, content: str, conversation_id: str = None):
-    """Save chat message to database"""
+def save_user_history(username: str, role: str, content: str):
+    """Chat-Nachricht in DB speichern"""
     if not CHAT_TABLE_CREATED:
         return
-    
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO chat_history (username, role, content, conversation_id) 
-            VALUES (?, ?, ?, ?)
-        """, (username, role, content, conversation_id))
-    
-    # Clear cache
-    cache.delete(f"history_{username}_{conversation_id or 'default'}")
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO chat_history (username, role, content) 
+        VALUES (?, ?, ?)
+    """, (username, role, content))
+    conn.commit()
+    conn.close()
 
 def delete_user_history(username: str):
-    """Delete chat history"""
+    """Chat-Verlauf löschen"""
     if not CHAT_TABLE_CREATED:
         return
-    
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
-    
-    # Clear cache
-    cache.delete(f"history_{username}_default")
+        
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
+    conn.commit()
+    conn.close()
 
+def toggle_user_block(username: str):
+    """User blockieren/entblockieren"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_blocked FROM users WHERE username = ?", (username,))
+    current = cursor.fetchone()[0]
+    new_status = 0 if current else 1
+    cursor.execute("UPDATE users SET is_blocked = ? WHERE username = ?", 
+                   (new_status, username))
+    conn.commit()
+    conn.close()
+
+def delete_user_completely(username: str):
+    """User und alle Daten löschen"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+    cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
+    cursor.execute("DELETE FROM api_keys WHERE username = ?", (username,))
+    conn.commit()
+    conn.close()
+
+def get_user_persona(username: str) -> str:
+    """Holt die gewählte Persona des Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT persona FROM users WHERE username = ?", (username,))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else "standard"
+    except sqlite3.OperationalError:
+        return "standard"
+    finally:
+        conn.close()
+
+def save_user_persona(username: str, persona: str):
+    """Speichert die gewählte Persona des Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+    
+    if 'persona' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN persona TEXT DEFAULT 'standard'")
+    
+    cursor.execute("UPDATE users SET persona = ? WHERE username = ?", (persona, username))
+    conn.commit()
+    conn.close()
+
+def get_user_theme(username: str) -> str:
+    """Holt Theme-Einstellung des Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT theme FROM users WHERE username = ?", (username,))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else "dark"
+    except sqlite3.OperationalError:
+        return "dark"
+    finally:
+        conn.close()
+
+def set_user_theme(username: str, theme: str):
+    """Setzt Theme-Einstellung für User"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
+    
+    if 'theme' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN theme TEXT DEFAULT 'dark'")
+    
+    cursor.execute("UPDATE users SET theme = ? WHERE username = ?", (theme, username))
+    conn.commit()
+    conn.close()
+
+def get_response_with_context(current_message: str, chat_history: list, persona: str = "standard") -> str:
+    """Holt KI-Antwort mit Chat-Kontext und Persona"""
+    messages = []
+    
+    persona_config = PERSONAS.get(persona, PERSONAS["standard"])
+    messages.append({
+        "role": "system", 
+        "content": persona_config["system_prompt"]
+    })
+    
+    for msg in chat_history[-20:]:
+        if msg["role"] in ["user", "assistant"]:
+            messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+    
+    messages.append({
+        "role": "user",
+        "content": current_message
+    })
+    
+    return get_response_with_messages(messages)
+
+# ──────────────────────────────
+# Subscription Management
+# ──────────────────────────────
 def get_user_subscription(username: str) -> SubscriptionTier:
-    """Get user subscription status"""
+    """Holt Subscription-Status eines Users"""
     user = get_user(username)
     if user:
         subscription = user.get("subscription", "free")
@@ -1627,55 +1506,35 @@ def get_user_subscription(username: str) -> SubscriptionTier:
     return SubscriptionTier.FREE
 
 def set_user_subscription(username: str, tier: SubscriptionTier):
-    """Set subscription tier for user"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET subscription = ? WHERE username = ?", (tier.value, username))
+    """Setzt Subscription-Tier für User"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    cache.delete(f"user_{username}")
-
-def get_user_theme(username: str) -> str:
-    """Get user theme preference"""
-    user = get_user(username)
-    return user.get("theme", "light") if user else "light"
-
-def set_user_theme(username: str, theme: str):
-    """Set user theme preference"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET theme = ? WHERE username = ?", (theme, username))
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [column[1] for column in cursor.fetchall()]
     
-    cache.delete(f"user_{username}")
-
-def get_user_persona(username: str) -> str:
-    """Get user's selected persona"""
-    user = get_user(username)
-    return user.get("persona", "standard") if user else "standard"
-
-def save_user_persona(username: str, persona: str):
-    """Save user's selected persona"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET persona = ? WHERE username = ?", (persona, username))
+    if 'subscription' not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN subscription TEXT DEFAULT 'free'")
     
-    cache.delete(f"user_{username}")
+    cursor.execute("UPDATE users SET subscription = ? WHERE username = ?", (tier.value, username))
+    conn.commit()
+    conn.close()
 
 def check_feature_access(username: str, feature: str) -> bool:
-    """Check if user has access to feature"""
+    """Prüft ob User Zugriff auf Feature hat"""
     tier = get_user_subscription(username)
     allowed_features = SUBSCRIPTION_LIMITS[tier]["features"]
     
     return "all" in allowed_features or feature in allowed_features
 
 def check_daily_limit(username: str, limit_type: str) -> bool:
-    """Check daily limits (messages, API calls)"""
+    """Prüft tägliche Limits (Nachrichten, API-Calls)"""
     tier = get_user_subscription(username)
     limit = SUBSCRIPTION_LIMITS[tier].get(f"{limit_type}_per_day", 0)
     
-    if limit == -1:  # Unlimited
+    if limit == -1:
         return True
     
-    # Check current usage
     analytics = load_analytics()
     today = datetime.now().strftime("%Y-%m-%d")
     user_data = analytics["users"].get(username, {})
@@ -1684,102 +1543,17 @@ def check_daily_limit(username: str, limit_type: str) -> bool:
     return current_usage < limit
 
 def get_available_personas(username: str) -> dict:
-    """Get available personas based on subscription"""
+    """Gibt verfügbare Personas basierend auf Subscription zurück"""
     tier = get_user_subscription(username)
     allowed_personas = SUBSCRIPTION_LIMITS[tier]["personas"]
     
     return {key: value for key, value in PERSONAS.items() if key in allowed_personas}
 
-def get_response_with_context(current_message: str, chat_history: list, persona: str = "standard") -> str:
-    """Get AI response with chat context and persona"""
-    messages = []
-    
-    # System prompt based on selected persona
-    persona_config = PERSONAS.get(persona, PERSONAS["standard"])
-    messages.append({
-        "role": "system", 
-        "content": persona_config["system_prompt"]
-    })
-    
-    # Add chat history (last 20 messages for better context)
-    for msg in chat_history[-20:]:
-        if msg["role"] in ["user", "assistant"]:
-            messages.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
-    
-    # Add current message
-    messages.append({
-        "role": "user",
-        "content": current_message
-    })
-    
-    return get_response_with_messages(messages)
-
-# ──────────────────────────────
-# API Key Management (Database)
-# ──────────────────────────────
-def save_api_key_to_db(api_key: str, username: str):
-    """Save API key to database"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO api_keys (api_key, username)
-            VALUES (?, ?)
-        """, (api_key, username))
-
-def get_api_key_from_db(api_key: str) -> Optional[dict]:
-    """Get API key info from database"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT username, created_at, requests_today, total_requests, last_used
-            FROM api_keys 
-            WHERE api_key = ? AND is_active = 1
-        """, (api_key,))
-        
-        row = cursor.fetchone()
-        if row:
-            return {
-                "username": row[0],
-                "created_at": row[1],
-                "requests_today": row[2],
-                "total_requests": row[3],
-                "last_used": row[4]
-            }
-    return None
-
-def get_user_api_keys(username: str) -> List[dict]:
-    """Get all API keys for a user"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT api_key, created_at, requests_today, total_requests, last_used
-            FROM api_keys 
-            WHERE username = ? AND is_active = 1
-            ORDER BY created_at DESC
-        """, (username,))
-        
-        return [dict(row) for row in cursor.fetchall()]
-
-def update_api_key_usage(api_key: str):
-    """Update API key usage statistics"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE api_keys 
-            SET requests_today = requests_today + 1, 
-                total_requests = total_requests + 1,
-                last_used = datetime('now')
-            WHERE api_key = ?
-        """, (api_key,))
-
 # ──────────────────────────────
 # Analytics System
 # ──────────────────────────────
 def load_analytics():
-    """Load analytics data"""
+    """Lädt Analytics-Daten"""
     if os.path.exists(ANALYTICS_FILE):
         try:
             with open(ANALYTICS_FILE, 'r') as f:
@@ -1789,29 +1563,23 @@ def load_analytics():
     return {"daily": {}, "users": {}, "features": {}, "api": {}}
 
 def save_analytics(data):
-    """Save analytics data"""
+    """Speichert Analytics-Daten"""
     with open(ANALYTICS_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
 def track_user_action(username: str, action: str, details: dict = None):
-    """Track user actions for analytics"""
-    background_tasks.add_task(_track_user_action_async, username, action, details)
-
-def _track_user_action_async(username: str, action: str, details: dict = None):
-    """Async analytics tracking"""
+    """Trackt User-Aktionen für Analytics"""
     analytics = load_analytics()
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # Daily statistics
     if today not in analytics["daily"]:
         analytics["daily"][today] = {
             "total_messages": 0,
-            "unique_users": [],
-            "personas_used": {},
-            "features_used": {}
+            "unique_users": set(),
+            "personas_used": defaultdict(int),
+            "features_used": defaultdict(int)
         }
     
-    # User-specific statistics
     if username not in analytics["users"]:
         analytics["users"][username] = {
             "first_seen": today,
@@ -1823,321 +1591,187 @@ def _track_user_action_async(username: str, action: str, details: dict = None):
             "features_used": []
         }
     
-    # Reset daily counters if new day
     if analytics["users"][username].get("last_reset") != today:
         analytics["users"][username]["messages_today"] = 0
         analytics["users"][username]["api_calls_today"] = 0
         analytics["users"][username]["last_reset"] = today
     
-    # Update data
     if action == "chat_message":
         analytics["daily"][today]["total_messages"] += 1
-        if username not in analytics["daily"][today]["unique_users"]:
-            analytics["daily"][today]["unique_users"].append(username)
+        analytics["daily"][today]["unique_users"].add(username)
         analytics["users"][username]["total_messages"] += 1
         analytics["users"][username]["messages_today"] += 1
         analytics["users"][username]["last_seen"] = today
         
         if details and "persona" in details:
-            persona = details["persona"]
-            analytics["daily"][today]["personas_used"][persona] = analytics["daily"][today]["personas_used"].get(persona, 0) + 1
+            analytics["daily"][today]["personas_used"][details["persona"]] += 1
     
     elif action == "api_call":
         analytics["users"][username]["api_calls_today"] += 1
         if details and "persona" in details:
-            persona = details["persona"]
-            analytics["daily"][today]["personas_used"][persona] = analytics["daily"][today]["personas_used"].get(persona, 0) + 1
+            analytics["daily"][today]["personas_used"][details["persona"]] += 1
     
     elif action == "feature_used":
         feature = details.get("feature", "unknown")
-        analytics["daily"][today]["features_used"][feature] = analytics["daily"][today]["features_used"].get(feature, 0) + 1
+        analytics["daily"][today]["features_used"][feature] += 1
         if feature not in analytics["users"][username]["features_used"]:
             analytics["users"][username]["features_used"].append(feature)
+    
+    if isinstance(analytics["daily"][today]["unique_users"], set):
+        analytics["daily"][today]["unique_users"] = list(analytics["daily"][today]["unique_users"])
+    analytics["daily"][today]["personas_used"] = dict(analytics["daily"][today]["personas_used"])
+    analytics["daily"][today]["features_used"] = dict(analytics["daily"][today]["features_used"])
     
     save_analytics(analytics)
 
 # ──────────────────────────────
-# Rate Limiting & Session Management
+# API Key Management (Database)
 # ──────────────────────────────
-def load_rate_limits():
-    """Load rate limit data"""
-    if os.path.exists(RATE_LIMIT_FILE):
-        try:
-            with open(RATE_LIMIT_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+def save_api_key_to_db(api_key: str, username: str):
+    """Speichert API-Key in Datenbank"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO api_keys (api_key, username, created_at) 
+        VALUES (?, ?, ?)
+    """, (api_key, username, datetime.now()))
+    
+    conn.commit()
+    conn.close()
 
-def save_rate_limits(limits):
-    """Save rate limit data"""
-    with open(RATE_LIMIT_FILE, 'w') as f:
-        json.dump(limits, f)
-
-def check_rate_limit(username: str) -> bool:
-    """Check if user has reached rate limit"""
-    limits = load_rate_limits()
-    current_time = time_now()
+def get_api_key_from_db(api_key: str) -> dict:
+    """Holt API-Key Info aus Datenbank"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    user_data = limits.get(username, {"messages": [], "last_reset": current_time})
+    cursor.execute("""
+        SELECT username, created_at, last_used, requests_today, total_requests, is_active 
+        FROM api_keys WHERE api_key = ? AND is_active = 1
+    """, (api_key,))
     
-    # Remove messages older than 1 hour
-    hour_ago = current_time - 3600
-    user_data["messages"] = [msg_time for msg_time in user_data["messages"] if msg_time > hour_ago]
+    row = cursor.fetchone()
+    conn.close()
     
-    # Check if limit reached
-    if len(user_data["messages"]) >= MESSAGES_PER_HOUR:
-        return False
-    
-    # Add new message
-    user_data["messages"].append(current_time)
-    limits[username] = user_data
-    save_rate_limits(limits)
-    
-    return True
-
-def update_session_activity(request: Request):
-    """Update last activity in session"""
-    request.session["last_activity"] = time_now()
-
-def check_session_timeout(request: Request) -> bool:
-    """Check if session has timed out"""
-    last_activity = request.session.get("last_activity")
-    if not last_activity:
-        return True
-    
-    return (time_now() - last_activity) > SESSION_TIMEOUT_SECONDS
-
-def require_active_session(request: Request):
-    """Check for active session"""
-    if not request.session.get("username"):
-        return RedirectResponse("/", status_code=302)
-    
-    if check_session_timeout(request):
-        request.session.clear()
-        return RedirectResponse("/?timeout=1", status_code=302)
-    
-    update_session_activity(request)
+    if row:
+        return {
+            "username": row[0],
+            "created_at": row[1],
+            "last_used": row[2],
+            "requests_today": row[3],
+            "total_requests": row[4],
+            "is_active": bool(row[5])
+        }
     return None
 
-def is_admin(request: Request) -> bool:
-    username = request.session.get("username")
-    if username:
-        user = get_user(username)
-        return user and user["is_admin"]
-    return False
-
-def admin_redirect_guard(request: Request):
-    if not is_admin(request):
-        return RedirectResponse("/", status_code=302)
-    return None
-
-def toggle_user_block(username: str):
-    """Toggle user block status"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT is_blocked FROM users WHERE username = ?", (username,))
-        current = cursor.fetchone()[0]
-        new_status = 0 if current else 1
-        cursor.execute("UPDATE users SET is_blocked = ? WHERE username = ?", 
-                       (new_status, username))
+def update_api_key_usage(api_key: str):
+    """Aktualisiert API-Key Nutzungsstatistiken"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    cache.delete(f"user_{username}")
-
-def delete_user_completely(username: str):
-    """Delete user and all data"""
-    with DatabaseConnection(db_pool) as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM users WHERE username = ?", (username,))
-        cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
-        cursor.execute("DELETE FROM api_keys WHERE username = ?", (username,))
+    today = datetime.now().strftime('%Y-%m-%d')
+    cursor.execute("""
+        UPDATE api_keys 
+        SET requests_today = CASE 
+            WHEN date(last_used) != date('now') THEN 1 
+            ELSE requests_today + 1 
+        END,
+        total_requests = total_requests + 1,
+        last_used = ?
+        WHERE api_key = ?
+    """, (datetime.now(), api_key))
     
-    cache.delete(f"user_{username}")
+    conn.commit()
+    conn.close()
+
+def get_user_api_keys(username: str) -> list:
+    """Holt alle API-Keys eines Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT api_key, created_at, last_used, requests_today, total_requests 
+        FROM api_keys WHERE username = ? AND is_active = 1
+        ORDER BY created_at DESC
+    """, (username,))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    
+    return [{
+        "api_key": row[0],
+        "created_at": row[1],
+        "last_used": row[2],
+        "requests_today": row[3],
+        "total_requests": row[4]
+    } for row in rows]
+
+def validate_api_key_db(api_key: str) -> Optional[dict]:
+    """Validiert API-Key aus Datenbank"""
+    return get_api_key_from_db(api_key)
+
+def track_api_usage_db(api_key: str):
+    """Trackt API-Nutzung in Datenbank"""
+    update_api_key_usage(api_key)
 
 # ──────────────────────────────
-# Export Functions
+# Chat Export Functions
 # ──────────────────────────────
 def export_user_chat_txt(username: str) -> str:
-    """Export chat history as text"""
+    """Exportiert Chat-Verlauf als TXT"""
     history = get_user_history(username)
-    output = [f"Chat-Export für {username} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"]
-    output.append("=" * 60 + "\n")
+    
+    txt_content = f"Chat-Verlauf für {username}\n"
+    txt_content += f"Exportiert am: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n"
+    txt_content += "=" * 50 + "\n\n"
     
     for msg in history:
-        timestamp = msg.get('timestamp', '')
-        role = msg.get('role', '').upper()
-        content = msg.get('content', '')
-        
-        output.append(f"[{timestamp}] {role}:\n{content}\n\n")
+        role = "Du" if msg["role"] == "user" else "KI-Assistent"
+        timestamp = msg.get("timestamp", "Unbekannt")
+        txt_content += f"[{timestamp}] {role}:\n{msg['content']}\n\n"
     
-    return '\n'.join(output)
+    return txt_content
 
 def export_user_chat_json(username: str) -> dict:
-    """Export chat history as JSON"""
+    """Exportiert Chat-Verlauf als JSON"""
     history = get_user_history(username)
     user = get_user(username)
     
     return {
-        "export_date": datetime.now().isoformat(),
         "username": username,
+        "export_date": datetime.now().isoformat(),
         "user_info": {
-            "subscription": user.get("subscription", "free"),
-            "persona": user.get("persona", "standard"),
-            "theme": user.get("theme", "light")
+            "persona": user.get("persona", "standard") if user else "unknown",
+            "subscription": user.get("subscription", "free") if user else "unknown"
         },
+        "total_messages": len(history),
         "chat_history": history
     }
 
 def create_user_export_package(username: str) -> bytes:
-    """Create ZIP package with all user data"""
-    zip_buffer = io.BytesIO()
+    """Erstellt komplettes Export-Paket als ZIP"""
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
     
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # Chat history as text
+    with zipfile.ZipFile(temp_zip.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
         txt_content = export_user_chat_txt(username)
-        zip_file.writestr(f"{username}_chat.txt", txt_content.encode('utf-8'))
+        zipf.writestr(f"{username}_chat.txt", txt_content.encode('utf-8'))
         
-        # Chat history as JSON
         json_content = json.dumps(export_user_chat_json(username), indent=2, ensure_ascii=False)
-        zip_file.writestr(f"{username}_data.json", json_content.encode('utf-8'))
+        zipf.writestr(f"{username}_chat.json", json_content.encode('utf-8'))
         
-        # User info
-        user = get_user(username)
-        user_info = {
-            "username": username,
-            "subscription": user.get("subscription", "free"),
-            "persona": user.get("persona", "standard"),
-            "theme": user.get("theme", "light"),
-            "export_date": datetime.now().isoformat()
-        }
-        zip_file.writestr("user_info.json", json.dumps(user_info, indent=2).encode('utf-8'))
+        analytics = load_analytics()
+        user_analytics = analytics.get("users", {}).get(username, {})
+        if user_analytics:
+            analytics_content = json.dumps(user_analytics, indent=2, ensure_ascii=False)
+            zipf.writestr(f"{username}_analytics.json", analytics_content.encode('utf-8'))
     
-    zip_buffer.seek(0)
-    return zip_buffer.read()
+    with open(temp_zip.name, 'rb') as f:
+        zip_data = f.read()
+    
+    os.unlink(temp_zip.name)
+    
+    return zip_data
 
 # ──────────────────────────────
-# Validation Helper
+# Rate Limiting & Session Management
 # ──────────────────────────────
-def validate_password_strength(password: str) -> tuple[bool, str]:
-    """Validate password strength"""
-    if len(password) < 8:
-        return False, "Passwort muss mindestens 8 Zeichen haben"
-    
-    if not any(c.isupper() for c in password):
-        return False, "Passwort muss mindestens einen Großbuchstaben enthalten"
-    
-    if not any(c.islower() for c in password):
-        return False, "Passwort muss mindestens einen Kleinbuchstaben enthalten"
-    
-    if not any(c.isdigit() for c in password):
-        return False, "Passwort muss mindestens eine Zahl enthalten"
-    
-    return True, "Passwort ist sicher"
-
-def validate_username(username: str) -> tuple[bool, str]:
-    """Validate username"""
-    if len(username) < 3:
-        return False, "Benutzername muss mindestens 3 Zeichen haben"
-    
-    if len(username) > 20:
-        return False, "Benutzername darf maximal 20 Zeichen haben"
-    
-    if not username.replace('_', '').replace('-', '').isalnum():
-        return False, "Benutzername darf nur Buchstaben, Zahlen, _ und - enthalten"
-    
-    return True, "Benutzername ist gültig"
-
-# ──────────────────────────────
-# Health Check System
-# ──────────────────────────────
-@app.get("/health")
-async def health_check():
-    """Comprehensive health check endpoint"""
-    health_data = {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "version": "2.0.0",
-        "checks": {}
-    }
-    
-    # Database check
-    try:
-        with DatabaseConnection(db_pool) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            health_data["checks"]["database"] = "healthy"
-    except Exception as e:
-        health_data["checks"]["database"] = f"unhealthy: {str(e)}"
-        health_data["status"] = "degraded"
-    
-    # File system check
-    try:
-        test_file = os.path.join(UPLOAD_DIR, ".health_check")
-        with open(test_file, "w") as f:
-            f.write("test")
-        os.remove(test_file)
-        health_data["checks"]["filesystem"] = "healthy"
-    except Exception as e:
-        health_data["checks"]["filesystem"] = f"unhealthy: {str(e)}"
-        health_data["status"] = "degraded"
-    
-    # AI Model check
-    try:
-        test_messages = [{"role": "user", "content": "test"}]
-        await ai_models.get_response(test_messages)
-        health_data["checks"]["ai_model"] = "healthy"
-    except Exception as e:
-        health_data["checks"]["ai_model"] = f"unhealthy: {str(e)}"
-        health_data["status"] = "degraded"
-    
-    # Memory usage
-    process = psutil.Process()
-    health_data["system"] = {
-        "memory_usage_mb": round(process.memory_info().rss / 1024 / 1024, 2),
-        "cpu_percent": process.cpu_percent(),
-        "open_files": len(process.open_files())
-    }
-    
-    # Cache statistics
-    health_data["cache"] = cache.stats()
-    
-    # Performance metrics
-    health_data["performance"] = performance_monitor.get_stats()
-    
-    return health_data
-
-# ──────────────────────────────
-# Routes - Auth
-# ──────────────────────────────
-@app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    request.session.clear()
-    timeout = request.query_params.get("timeout")
-    return templates.TemplateResponse("login.html", {
-        "request": request,
-        "timeout_message": "Deine Session ist abgelaufen. Bitte melde dich erneut an." if timeout else None
-    })
-
-@app.post("/login", response_class=HTMLResponse)
-async def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    if check_login(username, password):
-        user = get_user(username)
-        if user["is_blocked"]:
-            return templates.TemplateResponse("login.html", {
-                "request": request,
-                "error": "Du wurdest vom Admin gesperrt."
-            })
-        
-        request.session["username"] = username
-        request.session["csrf_token"] = generate_csrf_token()
-        update_session_activity(request)
-        
-        if user["is_admin"]:
-            return RedirectResponse("/admin", status_code=302)
-        else:
-            return RedirectResponse("/chat", status_code=302)
-    
-    return templates.TemplateResponse("login.html", {
-        "request": request, 
-        "error": "Falsche Anmeldedaten"
-    })
