@@ -20,6 +20,7 @@ from time import time
 from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Dict, List
 from collections import defaultdict, deque
+import time as _pytime
 
 from ollama_chat import get_response, get_response_with_messages
 
@@ -31,9 +32,7 @@ SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
 
 app = FastAPI()
 
-# Performance Monitoring Middleware HIER einfügen:
-performance_monitor = PerformanceMonitoringMiddleware(app, slow_threshold=2.0)
-app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
+
 
 # Dann erst die Session Middleware:
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
@@ -183,8 +182,7 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
             'recent_slow_requests': list(self.stats['slow_requests'])[-10:],  # Letzte 10 langsame
             'recent_requests': list(self.stats['last_requests'])[-20:]  # Letzte 20 allgemein
         }
-    performance_monitor = PerformanceMonitoringMiddleware(app, slow_threshold=2.0)
-    app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
+    
 # ──────────────────────────────
 # Database Helper Functions
 # ──────────────────────────────
@@ -581,6 +579,8 @@ def admin_redirect_guard(request: Request):
     if not is_admin(request):
         return RedirectResponse("/", status_code=302)
     return None
+
+app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
 
 # ──────────────────────────────
 # Routes - Auth
