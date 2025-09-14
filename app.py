@@ -16,7 +16,6 @@ import hmac
 import json
 import re
 from datetime import datetime
-from time import time
 from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Dict, List
 from collections import defaultdict, deque
@@ -31,8 +30,6 @@ load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
 
 app = FastAPI()
-
-
 
 # Dann erst die Session Middleware:
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
@@ -50,37 +47,90 @@ MESSAGES_PER_HOUR = 50
 SESSION_TIMEOUT_MINUTES = 30
 SESSION_TIMEOUT_SECONDS = SESSION_TIMEOUT_MINUTES * 60
 
-# Persona-Definitionen
+# ──────────────────────────────
+# Subscription Tiers Definition
+# ──────────────────────────────
+SUBSCRIPTION_TIERS = {
+    "free": {
+        "name": "Free",
+        "max_messages_per_hour": 10,
+        "max_messages_per_day": 50,
+        "available_personas": ["standard", "freundlich"],
+        "features": ["Basis-Chat", "2 Personas"]
+    },
+    "pro": {
+        "name": "Pro", 
+        "max_messages_per_hour": 100,
+        "max_messages_per_day": 500,
+        "available_personas": ["standard", "freundlich", "lustig", "professionell"],
+        "features": ["Erweiterte Personas", "Mehr Nachrichten", "Priorität"]
+    },
+    "premium": {
+        "name": "Premium",
+        "max_messages_per_hour": -1,  # Unlimited
+        "max_messages_per_day": -1,   # Unlimited
+        "available_personas": ["standard", "freundlich", "lustig", "professionell", "lehrerin", "kreativ", "analyst", "therapeut"],
+        "features": ["Alle Personas", "Unbegrenzte Nachrichten", "Höchste Priorität", "Erweiterte Features"]
+    }
+}
+
+# Enhanced Persona-Definitionen mit Tier-Zuordnung
 PERSONAS = {
     "standard": {
         "name": "Standard Assistent",
         "emoji": "🤖",
-        "system_prompt": "Du bist ein hilfsfreundlicher KI-Assistent. Antworte auf Deutsch und sei sachlich aber freundlich."
+        "system_prompt": "Du bist ein hilfsfreundlicher KI-Assistent. Antworte auf Deutsch und sei sachlich aber freundlich.",
+        "tier": "free",
+        "description": "Der klassische KI-Assistent für alltägliche Fragen"
     },
     "freundlich": {
         "name": "Freundlicher Helfer", 
         "emoji": "😊",
-        "system_prompt": "Du bist ein sehr freundlicher und enthusiastischer Assistent. Verwende warme, ermutigende Worte und zeige echtes Interesse an den Fragen. Sei optimistisch und unterstützend."
+        "system_prompt": "Du bist ein sehr freundlicher und enthusiastischer Assistent. Verwende warme, ermutigende Worte und zeige echtes Interesse an den Fragen. Sei optimistisch und unterstützend.",
+        "tier": "free",
+        "description": "Besonders warmherzig und ermutigend"
     },
     "lustig": {
         "name": "Comedy Bot",
         "emoji": "😄", 
-        "system_prompt": "Du bist ein humorvoller Assistent der gerne Witze macht und lustige Antworten gibt. Bleibe trotzdem hilfreich, aber bringe den User zum Lächeln. Verwende gelegentlich Wortwitz oder lustige Vergleiche."
+        "system_prompt": "Du bist ein humorvoller Assistent der gerne Witze macht und lustige Antworten gibt. Bleibe trotzdem hilfreich, aber bringe den User zum Lächeln. Verwende gelegentlich Wortwitz oder lustige Vergleiche.",
+        "tier": "pro",
+        "description": "Bringt Humor in jede Unterhaltung"
     },
     "professionell": {
         "name": "Business Experte",
         "emoji": "👔",
-        "system_prompt": "Du bist ein professioneller Berater mit Expertise in Business und Technik. Antworte präzise, strukturiert und sachlich. Nutze Fachbegriffe angemessen und gib konkrete Handlungsempfehlungen."
+        "system_prompt": "Du bist ein professioneller Berater mit Expertise in Business und Technik. Antworte präzise, strukturiert und sachlich. Nutze Fachbegriffe angemessen und gib konkrete Handlungsempfehlungen.",
+        "tier": "pro",
+        "description": "Für geschäftliche und technische Anfragen"
     },
     "lehrerin": {
         "name": "Geduldige Lehrerin", 
         "emoji": "👩‍🏫",
-        "system_prompt": "Du bist eine geduldige Lehrerin die komplexe Themen einfach erklärt. Baue Erklärungen schrittweise auf, verwende Beispiele und frage nach ob alles verstanden wurde. Ermutige zum Lernen."
+        "system_prompt": "Du bist eine geduldige Lehrerin die komplexe Themen einfach erklärt. Baue Erklärungen schrittweise auf, verwende Beispiele und frage nach ob alles verstanden wurde. Ermutige zum Lernen.",
+        "tier": "premium",
+        "description": "Erklärt komplexe Themen verständlich"
     },
     "kreativ": {
         "name": "Kreativer Geist",
         "emoji": "🎨", 
-        "system_prompt": "Du bist ein kreativer Assistent voller Ideen und Inspiration. Denke um die Ecke, schlage ungewöhnliche Lösungen vor und bringe künstlerische Perspektiven ein. Sei experimentierfreudig."
+        "system_prompt": "Du bist ein kreativer Assistent voller Ideen und Inspiration. Denke um die Ecke, schlage ungewöhnliche Lösungen vor und bringe künstlerische Perspektiven ein. Sei experimentierfreudig.",
+        "tier": "premium",
+        "description": "Für kreative Projekte und Inspiration"
+    },
+    "analyst": {
+        "name": "Daten Analyst",
+        "emoji": "📊",
+        "system_prompt": "Du bist ein präziser Datenanalyst. Analysiere Informationen systematisch, identifiziere Muster und Trends, und präsentiere Erkenntnisse klar strukturiert mit Zahlen und Fakten.",
+        "tier": "premium", 
+        "description": "Spezialist für Datenanalyse und Statistiken"
+    },
+    "therapeut": {
+        "name": "Empathischer Berater",
+        "emoji": "🧘‍♀️",
+        "system_prompt": "Du bist ein einfühlsamer Gesprächspartner der aktiv zuhört und unterstützt. Stelle durchdachte Fragen, biete verschiedene Perspektiven und hilfe dabei, Gedanken zu ordnen. Sei verständnisvoll aber nicht direktiv.",
+        "tier": "premium",
+        "description": "Für persönliche Gespräche und Reflexion"
     }
 }
 
@@ -210,7 +260,8 @@ def init_db():
             answer TEXT NOT NULL,
             is_admin INTEGER DEFAULT 0,
             is_blocked INTEGER DEFAULT 0,
-            persona TEXT DEFAULT 'standard'
+            persona TEXT DEFAULT 'standard',
+            subscription_tier TEXT DEFAULT 'free'
         )
     """)
     
@@ -231,8 +282,8 @@ def init_db():
     if not cursor.fetchone():
         admin_hash = hash_password("admin")
         cursor.execute("""
-            INSERT INTO users (username, password, question, answer, is_admin) 
-            VALUES (?, ?, ?, ?, 1)
+            INSERT INTO users (username, password, question, answer, is_admin, subscription_tier) 
+            VALUES (?, ?, ?, ?, 1, 'premium')
         """, ("admin", admin_hash, "Default Admin Question", "admin"))
         logger.info("[INIT] Admin-User erstellt (admin/admin)")
     
@@ -320,7 +371,8 @@ def get_user(username: str) -> dict:
             "answer": row[3],
             "is_admin": bool(row[4]),
             "is_blocked": bool(row[5]),
-            "persona": row[6] if len(row) > 6 else "standard"
+            "persona": row[6] if len(row) > 6 else "standard",
+            "subscription_tier": row[7] if len(row) > 7 else "free"
         }
     return None
 
@@ -339,7 +391,8 @@ def get_all_users() -> dict:
             "question": row[2],
             "answer": row[3],
             "is_admin": bool(row[4]),
-            "blocked": bool(row[5])  # für Template-Kompatibilität
+            "blocked": bool(row[5]),  # für Template-Kompatibilität
+            "subscription_tier": row[7] if len(row) > 7 else "free"
         }
     return users
 
@@ -354,8 +407,8 @@ def save_user(username: str, password: str, question: str, answer: str) -> bool:
     try:
         password_hash = hash_password(password)
         cursor.execute("""
-            INSERT INTO users (username, password, question, answer) 
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (username, password, question, answer, subscription_tier) 
+            VALUES (?, ?, ?, ?, 'free')
         """, (username, password_hash, question, answer))
         conn.commit()
         logger.info(f"[REGISTER] Neuer User: {username}")
@@ -482,6 +535,102 @@ def save_user_persona(username: str, persona: str):
     conn.commit()
     conn.close()
 
+# ──────────────────────────────
+# Enhanced Subscription Functions
+# ──────────────────────────────
+def get_user_subscription_tier(username: str) -> str:
+    """Holt das Subscription-Tier des Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT subscription_tier FROM users WHERE username = ?", (username,))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else "free"
+    except sqlite3.OperationalError:
+        # Spalte existiert noch nicht - hinzufügen
+        cursor.execute("ALTER TABLE users ADD COLUMN subscription_tier TEXT DEFAULT 'free'")
+        conn.commit()
+        return "free"
+    finally:
+        conn.close()
+
+def set_user_subscription_tier(username: str, tier: str):
+    """Setzt das Subscription-Tier für einen User"""
+    if tier not in SUBSCRIPTION_TIERS:
+        tier = "free"
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Sicherstellen, dass Spalte existiert
+    try:
+        cursor.execute("UPDATE users SET subscription_tier = ? WHERE username = ?", (tier, username))
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE users ADD COLUMN subscription_tier TEXT DEFAULT 'free'")
+        cursor.execute("UPDATE users SET subscription_tier = ? WHERE username = ?", (tier, username))
+    
+    conn.commit()
+    conn.close()
+
+def get_available_personas_for_user(username: str) -> dict:
+    """Gibt verfügbare Personas basierend auf Subscription zurück"""
+    user_tier = get_user_subscription_tier(username)
+    tier_config = SUBSCRIPTION_TIERS.get(user_tier, SUBSCRIPTION_TIERS["free"])
+    available_persona_keys = tier_config["available_personas"]
+    
+    return {key: persona for key, persona in PERSONAS.items() 
+            if key in available_persona_keys}
+
+def check_enhanced_rate_limit(username: str) -> dict:
+    """Erweiterte Rate-Limit-Prüfung basierend auf Subscription"""
+    user_tier = get_user_subscription_tier(username)
+    tier_config = SUBSCRIPTION_TIERS.get(user_tier, SUBSCRIPTION_TIERS["free"])
+    
+    max_per_hour = tier_config["max_messages_per_hour"]
+    max_per_day = tier_config["max_messages_per_day"]
+    
+    # Unlimited für Premium
+    if max_per_hour == -1:
+        return {"allowed": True, "remaining_hour": "∞", "remaining_day": "∞"}
+    
+    limits = load_rate_limits()
+    current_time = _pytime.time()
+    
+    user_data = limits.get(username, {"messages": [], "daily_messages": [], "last_reset": current_time})
+    
+    # Alte Nachrichten entfernen
+    hour_ago = current_time - 3600
+    day_ago = current_time - 86400
+    
+    user_data["messages"] = [msg_time for msg_time in user_data["messages"] if msg_time > hour_ago]
+    user_data["daily_messages"] = [msg_time for msg_time in user_data.get("daily_messages", []) if msg_time > day_ago]
+    
+    # Prüfen
+    hourly_used = len(user_data["messages"])
+    daily_used = len(user_data["daily_messages"])
+    
+    if hourly_used >= max_per_hour or (max_per_day != -1 and daily_used >= max_per_day):
+        return {
+            "allowed": False, 
+            "remaining_hour": max_per_hour - hourly_used,
+            "remaining_day": max_per_day - daily_used if max_per_day != -1 else "∞",
+            "tier": user_tier
+        }
+    
+    # Neue Nachricht hinzufügen
+    user_data["messages"].append(current_time)
+    user_data["daily_messages"].append(current_time)
+    limits[username] = user_data
+    save_rate_limits(limits)
+    
+    return {
+        "allowed": True,
+        "remaining_hour": max_per_hour - hourly_used - 1,
+        "remaining_day": max_per_day - daily_used - 1 if max_per_day != -1 else "∞",
+        "tier": user_tier
+    }
+
 def get_response_with_context(current_message: str, chat_history: list, persona: str = "standard") -> str:
     """
     Holt KI-Antwort mit Chat-Kontext und Persona
@@ -588,7 +737,6 @@ def admin_redirect_guard(request: Request):
         return RedirectResponse("/", status_code=302)
     return None
 
-
 # ──────────────────────────────
 # Routes - Auth
 # ──────────────────────────────
@@ -689,17 +837,27 @@ async def chat_page(request: Request):
     })
 
 @app.post("/chat")
-async def chat_with_markdown(req: Request):
-    # Session-Check
+async def chat_with_enhanced_limits(req: Request):
+    """Chat mit erweiterten Rate-Limits basierend auf Subscription"""
     redirect = require_active_session(req)
     if redirect:
         return {"reply": "Session abgelaufen. Bitte neu anmelden.", "redirect": "/"}
     
     username = req.session.get("username")
     
-    # Rate-Limit prüfen
-    if not check_rate_limit(username):
-        return {"reply": f"Rate-Limit erreicht! Maximal {MESSAGES_PER_HOUR} Nachrichten pro Stunde."}
+    # Erweiterte Rate-Limit-Prüfung
+    rate_limit_result = check_enhanced_rate_limit(username)
+    if not rate_limit_result["allowed"]:
+        tier = rate_limit_result.get("tier", "free")
+        tier_name = SUBSCRIPTION_TIERS.get(tier, {}).get("name", tier)
+        
+        return {
+            "reply": f"Rate-Limit erreicht für {tier_name}-Plan! " +
+                    f"Verbleibend heute: {rate_limit_result['remaining_day']}, " +
+                    f"diese Stunde: {rate_limit_result['remaining_hour']}",
+            "rate_limit": True,
+            "tier": tier
+        }
     
     data = await req.json()
     user_message = data.get("message", "")
@@ -707,18 +865,24 @@ async def chat_with_markdown(req: Request):
     if not user_message.strip():
         return {"reply": "Leere Nachricht."}
     
+    # Persona-Verfügbarkeit prüfen
+    current_persona = get_user_persona(username)
+    available_personas = get_available_personas_for_user(username)
+    
+    if current_persona not in available_personas:
+        # Fallback zu Standard-Persona
+        current_persona = "standard"
+        save_user_persona(username, current_persona)
+    
     # User-Nachricht speichern
     save_user_history(username, "user", user_message)
     
     # Chat-Historie für Kontext laden
     history = get_user_history(username)
     
-    # User-Persona laden
-    user_persona = get_user_persona(username)
-    
     try:
         # Raw-Antwort von KI holen
-        raw_response = get_response_with_context(user_message, history, user_persona)
+        raw_response = get_response_with_context(user_message, history, current_persona)
         
         # Markdown rendern
         rendered_response = render_markdown_simple(raw_response)
@@ -728,7 +892,11 @@ async def chat_with_markdown(req: Request):
         
         return {
             "reply": rendered_response,
-            "raw_reply": raw_response  # für TTS
+            "raw_reply": raw_response,
+            "remaining_messages": {
+                "hour": rate_limit_result["remaining_hour"],
+                "day": rate_limit_result["remaining_day"]
+            }
         }
         
     except Exception as e:
@@ -755,35 +923,59 @@ async def clear_user_history(request: Request):
 # ──────────────────────────────
 @app.get("/persona", response_class=HTMLResponse)
 async def persona_settings(request: Request):
-    """Persona-Einstellungen Seite"""
+    """Persona-Einstellungen Seite mit Subscription-Support"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
     username = request.session.get("username")
     current_persona = get_user_persona(username)
+    user_tier = get_user_subscription_tier(username)
+    
+    # Verfügbare Personas für User-Tier
+    available_personas = get_available_personas_for_user(username)
+    
+    # Tier-Informationen
+    tier_info = SUBSCRIPTION_TIERS.get(user_tier, SUBSCRIPTION_TIERS["free"])
     
     return templates.TemplateResponse("persona.html", {
         "request": request,
-        "username": username, 
+        "username": username,
         "personas": PERSONAS,
-        "current_persona": current_persona
+        "available_personas": available_personas,
+        "current_persona": current_persona,
+        "subscription_tier": user_tier,
+        "tier_info": tier_info,
+        "subscription_tiers": SUBSCRIPTION_TIERS
     })
 
 @app.post("/persona")
 async def set_persona(request: Request, persona: str = Form(...)):
-    """Persona auswählen"""
+    """Persona auswählen mit Subscription-Prüfung"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
     username = request.session.get("username")
+    available_personas = get_available_personas_for_user(username)
     
-    if persona in PERSONAS:
+    if persona in available_personas:
         save_user_persona(username, persona)
         logger.info(f"[PERSONA] {username} wählte Persona: {persona}")
-    
-    return RedirectResponse("/chat", status_code=302)
+        return RedirectResponse("/chat", status_code=302)
+    else:
+        # Persona nicht verfügbar für User-Tier
+        return templates.TemplateResponse("persona.html", {
+            "request": request,
+            "username": username,
+            "personas": PERSONAS,
+            "available_personas": available_personas,
+            "current_persona": get_user_persona(username),
+            "subscription_tier": get_user_subscription_tier(username),
+            "tier_info": SUBSCRIPTION_TIERS.get(get_user_subscription_tier(username), SUBSCRIPTION_TIERS["free"]),
+            "subscription_tiers": SUBSCRIPTION_TIERS,
+            "error": f"Persona '{PERSONAS.get(persona, {}).get('name', persona)}' ist nicht in deinem aktuellen Plan verfügbar."
+        })
 
 # ──────────────────────────────
 # Routes - Admin
@@ -802,7 +994,8 @@ async def admin_page(request: Request):
     users = get_all_users()
     return templates.TemplateResponse("admin_users.html", {
         "request": request, 
-        "users": users
+        "users": users,
+        "subscription_tiers": SUBSCRIPTION_TIERS
     })
 
 @app.post("/admin/toggle-block")
@@ -814,6 +1007,21 @@ async def toggle_block_user(request: Request, username: str = Form(...)):
     if username != "admin":  # Admin kann sich nicht selbst blockieren
         toggle_user_block(username)
         logger.info(f"[ADMIN] User blockiert/freigeschaltet: {username}")
+    
+    return RedirectResponse("/admin", status_code=302)
+
+@app.post("/admin/change-tier")
+async def change_user_tier(request: Request, 
+                          username: str = Form(...),
+                          tier: str = Form(...)):
+    """Admin kann User-Subscription-Tier ändern"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if tier in SUBSCRIPTION_TIERS:
+        set_user_subscription_tier(username, tier)
+        logger.info(f"[ADMIN] Subscription-Tier für {username} geändert zu: {tier}")
     
     return RedirectResponse("/admin", status_code=302)
 
@@ -896,6 +1104,7 @@ async def change_admin_password(request: Request,
         return templates.TemplateResponse("admin_users.html", {
             "request": request,
             "users": users,
+            "subscription_tiers": SUBSCRIPTION_TIERS,
             "error": "Altes Passwort ist falsch"
         })
 
@@ -904,7 +1113,7 @@ async def export_csv():
     users = get_all_users()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Benutzername", "Passwort-Hash", "Frage", "Antwort", "Admin", "Blockiert"])
+    writer.writerow(["Benutzername", "Passwort-Hash", "Frage", "Antwort", "Admin", "Blockiert", "Subscription-Tier"])
     
     for name, data in users.items():
         writer.writerow([
@@ -913,7 +1122,8 @@ async def export_csv():
             data.get("question", ""),
             data.get("answer", ""),
             "Ja" if data.get("is_admin") else "Nein",
-            "Ja" if data.get("blocked") else "Nein"
+            "Ja" if data.get("blocked") else "Nein",
+            data.get("subscription_tier", "free")
         ])
     
     output.seek(0)
@@ -922,6 +1132,7 @@ async def export_csv():
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=users.csv"}
     )
+
 @app.get("/admin/performance", response_class=HTMLResponse)
 async def admin_performance(request: Request):
     """Admin-Seite für Performance-Monitoring"""
@@ -954,7 +1165,8 @@ async def api_performance_stats(request: Request):
     if redirect:
         return {"error": "Session expired"}
     
-    return performance_monitor.get_stats()
+    return PerformanceMonitoringMiddleware.instance.get_stats()
+
 # ──────────────────────────────
 # API Routes
 # ──────────────────────────────
@@ -981,4 +1193,4 @@ async def session_info(request: Request):
 @app.on_event("startup")
 def startup():
     init_db()
-    logger.info("[STARTUP] KI-Chat gestartet")
+    logger.info("[STARTUP] KI-Chat mit Subscription-System gestartet")

@@ -3,309 +3,549 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Persona Auswahl - KI Chat</title>
+    <title>KI Persona Einstellungen</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
             padding: 20px;
         }
-        
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            padding: 30px;
-        }
-        
+
         .header {
-            text-align: center;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
             margin-bottom: 30px;
+            text-align: center;
         }
-        
+
         .header h1 {
-            color: #333;
+            color: #667eea;
             margin-bottom: 10px;
+            font-size: 2.5em;
         }
-        
+
+        .header .user-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
         .subscription-info {
-            background: #e3f2fd;
-            border: 1px solid #2196f3;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .tier-badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 0.8em;
+            letter-spacing: 0.5px;
+        }
+
+        .tier-free { background: #e3f2fd; color: #1976d2; }
+        .tier-pro { background: #f3e5f5; color: #7b1fa2; }
+        .tier-premium { background: #fff3e0; color: #f57c00; }
+
+        .nav-buttons {
+            display: flex;
+            gap: 15px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
             border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 30px;
-            text-align: center;
+            font-size: 16px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
         }
-        
-        .subscription-info.premium {
-            background: #fff3e0;
-            border-color: #ff9800;
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
         }
-        
-        .subscription-info.enterprise {
-            background: #f3e5f5;
-            border-color: #9c27b0;
+
+        .btn-primary:hover {
+            background: #5a67d8;
+            transform: translateY(-2px);
         }
-        
+
+        .btn-secondary {
+            background: #718096;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #2d3748;
+        }
+
         .personas-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 25px;
             margin-bottom: 30px;
         }
-        
+
         .persona-card {
-            border: 2px solid #e9ecef;
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .persona-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+
+        .persona-card.active {
+            border: 3px solid #667eea;
+            box-shadow: 0 15px 40px rgba(102, 126, 234, 0.3);
+        }
+
+        .persona-card.locked {
+            opacity: 0.6;
+            position: relative;
+        }
+
+        .persona-card.locked::before {
+            content: '🔒';
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            font-size: 1.5em;
+            z-index: 2;
+        }
+
+        .persona-card.locked::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.8);
+            z-index: 1;
+        }
+
+        .persona-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .persona-emoji {
+            font-size: 2.5em;
+            background: #f8f9fa;
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .persona-title {
+            flex: 1;
+        }
+
+        .persona-title h3 {
+            color: #2d3748;
+            font-size: 1.4em;
+            margin-bottom: 5px;
+        }
+
+        .persona-tier {
+            font-size: 0.7em;
+            padding: 4px 8px;
+            border-radius: 12px;
+            text-transform: uppercase;
+            font-weight: bold;
+            letter-spacing: 0.5px;
+        }
+
+        .persona-description {
+            color: #4a5568;
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+
+        .persona-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-select {
+            flex: 1;
+            background: #48bb78;
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        .btn-select:hover {
+            background: #38a169;
+        }
+
+        .btn-select:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+        }
+
+        .btn-current {
+            background: #667eea;
+            cursor: default;
+        }
+
+        .btn-upgrade {
+            background: #ed8936;
+            color: white;
+        }
+
+        .btn-upgrade:hover {
+            background: #dd6b20;
+        }
+
+        .subscription-tiers {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            margin-top: 30px;
+        }
+
+        .subscription-tiers h2 {
+            text-align: center;
+            color: #2d3748;
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+
+        .tiers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 25px;
+        }
+
+        .tier-card {
+            border: 2px solid #e2e8f0;
             border-radius: 12px;
             padding: 25px;
             text-align: center;
-            transition: all 0.3s ease;
             position: relative;
-            cursor: pointer;
+            transition: all 0.3s ease;
         }
-        
-        .persona-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+
+        .tier-card.current {
+            border-color: #667eea;
+            background: linear-gradient(135deg, #667eea10, #764ba210);
         }
-        
-        .persona-card.current {
-            border-color: #28a745;
-            background: linear-gradient(135deg, #f8fff9 0%, #e8f5e8 100%);
+
+        .tier-card:hover {
+            border-color: #667eea;
+            transform: translateY(-3px);
         }
-        
-        .persona-card.unavailable {
-            opacity: 0.5;
-            cursor: not-allowed;
-            background: #f8f9fa;
-        }
-        
-        .persona-card.unavailable::before {
-            content: '🔒';
-            position: absolute;
-            top: 10px;
-            right: 15px;
-            font-size: 20px;
-        }
-        
-        .persona-emoji {
-            font-size: 48px;
-            margin-bottom: 15px;
-        }
-        
-        .persona-name {
-            font-size: 20px;
+
+        .tier-name {
+            font-size: 1.8em;
             font-weight: bold;
-            color: #333;
             margin-bottom: 10px;
         }
-        
-        .persona-description {
-            color: #666;
-            font-size: 14px;
-            line-height: 1.5;
-            margin-bottom: 20px;
+
+        .tier-features {
+            list-style: none;
+            margin: 20px 0;
         }
-        
-        .select-btn {
-            background: #007bff;
-            color: white;
-            border: none;
-            padding: 10px 25px;
-            border-radius: 25px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease;
+
+        .tier-features li {
+            padding: 8px 0;
+            color: #4a5568;
         }
-        
-        .select-btn:hover {
-            background: #0056b3;
-            transform: scale(1.05);
-        }
-        
-        .select-btn:disabled {
-            background: #6c757d;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .current-badge {
-            position: absolute;
-            top: -10px;
-            left: 20px;
-            background: #28a745;
-            color: white;
-            padding: 5px 15px;
-            border-radius: 15px;
-            font-size: 12px;
+
+        .tier-features li::before {
+            content: '✓ ';
+            color: #48bb78;
             font-weight: bold;
         }
-        
-        .upgrade-notice {
-            background: #fff3cd;
-            border: 1px solid #ffeeba;
-            border-radius: 8px;
+
+        .error-message {
+            background: #fed7d7;
+            color: #c53030;
             padding: 15px;
-            margin-top: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
             text-align: center;
-        }
-        
-        .upgrade-btn {
-            background: #ffc107;
-            color: #212529;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
-            font-weight: bold;
-            cursor: pointer;
-            margin-top: 10px;
-            text-decoration: none;
-            display: inline-block;
-        }
-        
-        .upgrade-btn:hover {
-            background: #e0a800;
-        }
-        
-        .nav-links {
-            text-align: center;
-            margin-top: 30px;
-        }
-        
-        .nav-links a {
-            color: #007bff;
-            text-decoration: none;
-            margin: 0 15px;
             font-weight: 500;
-            padding: 8px 16px;
-            border-radius: 5px;
-            transition: all 0.3s ease;
         }
-        
-        .nav-links a:hover {
-            background: #007bff;
-            color: white;
+
+        .success-message {
+            background: #c6f6d5;
+            color: #2f855a;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+            font-weight: 500;
         }
-        
+
         @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            .header .user-info {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+            
             .personas-grid {
                 grid-template-columns: 1fr;
             }
             
-            .container {
-                padding: 20px;
+            .nav-buttons {
+                flex-wrap: wrap;
+            }
+            
+            .tiers-grid {
+                grid-template-columns: 1fr;
             }
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- Header -->
         <div class="header">
-            <h1>Persona Auswahl</h1>
-            <p>Wähle eine KI-Persönlichkeit für deine Gespräche</p>
+            <h1>🎭 KI Persona Einstellungen</h1>
+            
+            <div class="user-info">
+                <div class="subscription-info">
+                    <span><strong>Benutzer:</strong> {{ username }}</span>
+                    <span class="tier-badge tier-{{ subscription_tier }}">
+                        {{ tier_info.name }} Plan
+                    </span>
+                </div>
+                
+                <div class="nav-buttons">
+                    <a href="/chat" class="btn btn-primary">💬 Zurück zum Chat</a>
+                    <a href="/logout" class="btn btn-secondary">🚪 Logout</a>
+                </div>
+            </div>
         </div>
 
-        <div class="subscription-info {{ subscription_tier }}">
-            <strong>Aktueller Plan: {{ subscription_tier.title() }}</strong>
-            <br>
-            {% if subscription_tier == 'free' %}
-            Du hast Zugriff auf {{ personas|length }} von {{ all_personas|length }} verfügbaren Personas.
-            {% elif subscription_tier == 'premium' %}
-            Du hast Zugriff auf alle Personas! Premium-Vorteil aktiv.
-            {% elif subscription_tier == 'enterprise' %}
-            Du hast Zugriff auf alle Personas und erweiterte Features!
-            {% endif %}
+        <!-- Error/Success Messages -->
+        {% if error %}
+        <div class="error-message">
+            ⚠️ {{ error }}
         </div>
+        {% endif %}
 
+        <!-- Personas Grid -->
         <div class="personas-grid">
-            {% for key, persona in all_personas.items() %}
-            <div class="persona-card {% if current_persona == key %}current{% endif %} {% if key not in personas %}unavailable{% endif %}">
-                {% if current_persona == key %}
-                <div class="current-badge">Aktiv</div>
-                {% endif %}
+            {% for key, persona in personas.items() %}
+            <div class="persona-card {% if key == current_persona %}active{% endif %} {% if key not in available_personas %}locked{% endif %}">
+                <div class="persona-header">
+                    <div class="persona-emoji">{{ persona.emoji }}</div>
+                    <div class="persona-title">
+                        <h3>{{ persona.name }}</h3>
+                        <span class="persona-tier tier-{{ persona.tier }}">{{ persona.tier.upper() }}</span>
+                    </div>
+                </div>
                 
-                <div class="persona-emoji">{{ persona.emoji }}</div>
-                <div class="persona-name">{{ persona.name }}</div>
-                <div class="persona-description">{{ persona.system_prompt[:100] }}...</div>
+                <p class="persona-description">{{ persona.description }}</p>
                 
-                {% if key in personas %}
-                <form method="post" style="display: inline;">
-                    <input type="hidden" name="persona" value="{{ key }}">
-                    <button type="submit" class="select-btn" {% if current_persona == key %}disabled{% endif %}>
-                        {% if current_persona == key %}Aktiv{% else %}Auswählen{% endif %}
-                    </button>
-                </form>
-                {% else %}
-                <button class="select-btn" disabled>Nicht verfügbar</button>
-                {% endif %}
+                <div class="persona-actions">
+                    {% if key in available_personas %}
+                        {% if key == current_persona %}
+                            <button class="btn-select btn-current" disabled>
+                                ✅ Aktuell Aktiv
+                            </button>
+                        {% else %}
+                            <form method="post" style="flex: 1;">
+                                <input type="hidden" name="persona" value="{{ key }}">
+                                <button type="submit" class="btn-select">
+                                    🔄 Auswählen
+                                </button>
+                            </form>
+                        {% endif %}
+                    {% else %}
+                        <button class="btn-select btn-upgrade" disabled>
+                            🔒 Upgrade Erforderlich
+                        </button>
+                    {% endif %}
+                </div>
             </div>
             {% endfor %}
         </div>
 
-        {% if subscription_tier == 'free' %}
-        <div class="upgrade-notice">
-            <h3>Möchtest du mehr Personas?</h3>
-            <p>Upgrade auf Premium für Zugriff auf alle {{ all_personas|length }} Personas!</p>
-            <a href="/subscription" class="upgrade-btn">Zu Premium upgraden</a>
+        <!-- Subscription Tiers Info -->
+        <div class="subscription-tiers">
+            <h2>📊 Verfügbare Pläne</h2>
+            
+            <div class="tiers-grid">
+                {% for tier_key, tier in subscription_tiers.items() %}
+                <div class="tier-card {% if tier_key == subscription_tier %}current{% endif %}">
+                    <div class="tier-name tier-{{ tier_key }}">
+                        {{ tier.name }}
+                        {% if tier_key == subscription_tier %}
+                        <div style="color: #667eea; font-size: 0.6em; margin-top: 5px;">
+                            ← Dein aktueller Plan
+                        </div>
+                        {% endif %}
+                    </div>
+                    
+                    <ul class="tier-features">
+                        {% for feature in tier.features %}
+                        <li>{{ feature }}</li>
+                        {% endfor %}
+                        
+                        <li>
+                            {% if tier.max_messages_per_hour == -1 %}
+                            Unbegrenzte Nachrichten
+                            {% else %}
+                            {{ tier.max_messages_per_hour }} Nachrichten/Stunde
+                            {% endif %}
+                        </li>
+                        
+                        <li>{{ tier.available_personas|length }} Verfügbare Personas</li>
+                    </ul>
+                    
+                    {% if tier_key != subscription_tier %}
+                    <div style="margin-top: 20px;">
+                        <em style="color: #718096;">
+                            Kontaktiere den Admin für ein Upgrade
+                        </em>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
         </div>
-        {% endif %}
 
-        <div class="nav-links">
-            <a href="/chat">Zurück zum Chat</a>
-            <a href="/subscription">Subscription verwalten</a>
-            {% if subscription_tier in ['premium', 'enterprise'] or username == 'admin' %}
-            <a href="/admin/analytics">Analytics</a>
-            {% endif %}
+        <!-- Current Plan Details -->
+        <div class="subscription-tiers">
+            <h2>🎯 Dein aktueller Plan im Detail</h2>
+            
+            <div style="background: #f8f9fa; padding: 25px; border-radius: 12px;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; text-align: center;">
+                    
+                    <div>
+                        <div style="font-size: 2em; color: #667eea; margin-bottom: 10px;">🎭</div>
+                        <h3>Verfügbare Personas</h3>
+                        <p style="font-size: 1.5em; font-weight: bold; color: #2d3748;">
+                            {{ available_personas|length }} / {{ personas|length }}
+                        </p>
+                        <p style="color: #718096; font-size: 0.9em;">
+                            Personas verfügbar
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <div style="font-size: 2em; color: #48bb78; margin-bottom: 10px;">💬</div>
+                        <h3>Nachrichten-Limit</h3>
+                        <p style="font-size: 1.5em; font-weight: bold; color: #2d3748;">
+                            {% if tier_info.max_messages_per_hour == -1 %}
+                            ∞
+                            {% else %}
+                            {{ tier_info.max_messages_per_hour }}
+                            {% endif %}
+                        </p>
+                        <p style="color: #718096; font-size: 0.9em;">
+                            Nachrichten pro Stunde
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <div style="font-size: 2em; color: #ed8936; margin-bottom: 10px;">⭐</div>
+                        <h3>Plan-Status</h3>
+                        <p style="font-size: 1.5em; font-weight: bold;" class="tier-{{ subscription_tier }}">
+                            {{ tier_info.name }}
+                        </p>
+                        <p style="color: #718096; font-size: 0.9em;">
+                            Aktueller Plan
+                        </p>
+                    </div>
+                    
+                </div>
+                
+                <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0;">
+                    <h4 style="margin-bottom: 15px; color: #2d3748;">Deine verfügbaren Personas:</h4>
+                    <div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;">
+                        {% for key, persona in available_personas.items() %}
+                        <span style="background: #e6fffa; color: #319795; padding: 8px 16px; border-radius: 20px; font-size: 0.9em;">
+                            {{ persona.emoji }} {{ persona.name }}
+                        </span>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="text-align: center; margin-top: 40px; color: rgba(255,255,255,0.8);">
+            <p>💡 <strong>Tipp:</strong> Verschiedene Personas haben unterschiedliche Gesprächsstile und Expertisen.</p>
+            <p style="margin-top: 10px;">Experimentiere mit verschiedenen Personas für die besten Ergebnisse!</p>
         </div>
     </div>
 
     <script>
-        // Persona-Karten interaktiv machen
-        document.querySelectorAll('.persona-card:not(.unavailable)').forEach(card => {
-            card.addEventListener('click', function() {
-                const form = this.querySelector('form');
-                if (form && !this.classList.contains('current')) {
-                    form.submit();
-                }
-            });
-        });
-
-        // Tooltip für gesperrte Personas
-        document.querySelectorAll('.persona-card.unavailable').forEach(card => {
-            card.addEventListener('mouseenter', function() {
-                const tooltip = document.createElement('div');
-                tooltip.style.cssText = `
-                    position: absolute;
-                    background: #333;
-                    color: white;
-                    padding: 8px 12px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                    white-space: nowrap;
-                    z-index: 1000;
-                    top: -40px;
-                    left: 50%;
-                    transform: translateX(-50%);
-                `;
-                tooltip.textContent = 'Premium-Feature - Upgrade erforderlich';
-                this.style.position = 'relative';
-                this.appendChild(tooltip);
-            });
-            
-            card.addEventListener('mouseleave', function() {
-                const tooltip = this.querySelector('div[style*="position: absolute"]');
-                if (tooltip) tooltip.remove();
-            });
-        });
+        // Session-Timeout Warning (falls implementiert)
+        let sessionWarningShown = false;
+        
+        function checkSession() {
+            fetch('/api/session-info')
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.active) {
+                        window.location.href = '/';
+                    } else if (data.remaining_minutes <= 5 && !sessionWarningShown) {
+                        sessionWarningShown = true;
+                        alert(`Warnung: Deine Session läuft in ${data.remaining_minutes} Minuten ab.`);
+                    }
+                })
+                .catch(console.error);
+        }
+        
+        // Check session every 2 minutes
+        setInterval(checkSession, 120000);
+        
+        // Initial check
+        checkSession();
     </script>
 </body>
 </html>
