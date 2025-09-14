@@ -92,8 +92,7 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
     - Sammelt Statistiken
     - Speichert langsame Requests
     """
-    performance_monitor = PerformanceMonitoringMiddleware(app, slow_threshold=2.0)
-    app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
+    
     
     def __init__(self, app, slow_threshold: float = 2.0):
         super().__init__(app)
@@ -105,6 +104,7 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
             'endpoint_stats': defaultdict(lambda: {'count': 0, 'total_time': 0.0}),
             'last_requests': deque(maxlen=50)  # Letzte 50 Requests
         }
+     
     
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
@@ -183,7 +183,8 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
             'recent_slow_requests': list(self.stats['slow_requests'])[-10:],  # Letzte 10 langsame
             'recent_requests': list(self.stats['last_requests'])[-20:]  # Letzte 20 allgemein
         }
-
+    performance_monitor = PerformanceMonitoringMiddleware(app, slow_threshold=2.0)
+    app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
 # ──────────────────────────────
 # Database Helper Functions
 # ──────────────────────────────
