@@ -84,6 +84,10 @@ PERSONAS = {
     }
 }
 
+# ──────────────────────────────
+# Performance Monitoring Middleware
+# ──────────────────────────────
+
 class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
     """
     Middleware für Performance-Monitoring
@@ -91,7 +95,8 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
     - Sammelt Statistiken
     - Speichert langsame Requests
     """
-    
+
+    instance = None  # Statische Referenz auf die Instanz
     
     def __init__(self, app, slow_threshold: float = 2.0):
         super().__init__(app)
@@ -103,61 +108,61 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
             'endpoint_stats': defaultdict(lambda: {'count': 0, 'total_time': 0.0}),
             'last_requests': deque(maxlen=50)  # Letzte 50 Requests
         }
-     
-    
+        PerformanceMonitoringMiddleware.instance = self  # Instanz merken
+
     async def dispatch(self, request: Request, call_next):
-        start_time = time.time()
-        
+        start_time = _pytime.time()
+
         # Request verarbeiten
         response = await call_next(request)
-        
+
         # Performance messen
-        process_time = time.time() - start_time
-        
+        process_time = _pytime.time() - start_time
+
         # Statistiken aktualisieren
         self._update_stats(request, process_time)
-        
+
         # Performance-Header hinzufügen
         response.headers["X-Process-Time"] = str(round(process_time, 4))
-        
+
         return response
-    
+
     def _update_stats(self, request: Request, process_time: float):
         """Interne Statistiken aktualisieren"""
         path = request.url.path
         method = request.method
         endpoint = f"{method} {path}"
-        
+
         # Global stats
         self.stats['total_requests'] += 1
         self.stats['total_time'] += process_time
-        
+
         # Endpoint stats
         self.stats['endpoint_stats'][endpoint]['count'] += 1
         self.stats['endpoint_stats'][endpoint]['total_time'] += process_time
-        
+
         # Langsame Requests tracken
         if process_time > self.slow_threshold:
             self.stats['slow_requests'].append({
-                'timestamp': time.time(),
+                'timestamp': _pytime.time(),
                 'endpoint': endpoint,
                 'duration': round(process_time, 4),
                 'user_agent': request.headers.get('user-agent', 'Unknown')[:100]
             })
-        
+
         # Letzte Requests tracken
         self.stats['last_requests'].append({
-            'timestamp': time.time(),
+            'timestamp': _pytime.time(),
             'endpoint': endpoint,
             'duration': round(process_time, 4),
             'status': 'slow' if process_time > self.slow_threshold else 'normal'
         })
-    
+
     def get_stats(self) -> Dict:
         """Performance-Statistiken zurückgeben"""
-        avg_time = (self.stats['total_time'] / self.stats['total_requests'] 
+        avg_time = (self.stats['total_time'] / self.stats['total_requests']
                    if self.stats['total_requests'] > 0 else 0)
-        
+
         # Endpoint-Statistiken aufbereiten
         endpoint_stats = []
         for endpoint, data in self.stats['endpoint_stats'].items():
@@ -168,10 +173,10 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
                 'avg_time': round(avg_endpoint_time, 4),
                 'total_time': round(data['total_time'], 4)
             })
-        
+
         # Nach durchschnittlicher Zeit sortieren
         endpoint_stats.sort(key=lambda x: x['avg_time'], reverse=True)
-        
+
         return {
             'total_requests': self.stats['total_requests'],
             'average_response_time': round(avg_time, 4),
@@ -182,7 +187,10 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
             'recent_slow_requests': list(self.stats['slow_requests'])[-10:],  # Letzte 10 langsame
             'recent_requests': list(self.stats['last_requests'])[-20:]  # Letzte 20 allgemein
         }
-    
+
+# Middleware einbinden
+app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
+
 # ──────────────────────────────
 # Database Helper Functions
 # ──────────────────────────────
@@ -524,7 +532,7 @@ def save_rate_limits(limits):
 def check_rate_limit(username: str) -> bool:
     """Prüft ob User Rate-Limit erreicht hat"""
     limits = load_rate_limits()
-    current_time = time()
+    current_time = _pytime.time()
     
     user_data = limits.get(username, {"messages": [], "last_reset": current_time})
     
@@ -546,7 +554,7 @@ def check_rate_limit(username: str) -> bool:
 # Session-Management
 def update_session_activity(request: Request):
     """Aktualisiert die letzte Aktivität in der Session"""
-    request.session["last_activity"] = time()
+    request.session["last_activity"] = _pytime.time()
 
 def check_session_timeout(request: Request) -> bool:
     """Prüft ob Session abgelaufen ist"""
@@ -554,7 +562,7 @@ def check_session_timeout(request: Request) -> bool:
     if not last_activity:
         return True
     
-    return (time() - last_activity) > SESSION_TIMEOUT_SECONDS
+    return (_pytime.time() - last_activity) > SESSION_TIMEOUT_SECONDS
 
 def require_active_session(request: Request):
     """Middleware-ähnliche Funktion für Session-Check"""
@@ -580,7 +588,6 @@ def admin_redirect_guard(request: Request):
         return RedirectResponse("/", status_code=302)
     return None
 
-app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
 
 # ──────────────────────────────
 # Routes - Auth
@@ -928,7 +935,8 @@ async def admin_performance(request: Request):
         return redirect
     
     # Performance-Daten vom globalen Monitor holen
-    stats = performance_monitor.get_stats()
+    stats = PerformanceMonitoringMiddleware.instance.get_stats()
+
     
     return templates.TemplateResponse("admin_performance.html", {
         "request": request,
@@ -956,8 +964,9 @@ async def session_info(request: Request):
     if not request.session.get("username"):
         return {"active": False}
     
-    last_activity = request.session.get("last_activity", time())
-    remaining_seconds = max(0, SESSION_TIMEOUT_SECONDS - (time() - last_activity))
+    last_activity = request.session.get("last_activity", _pytime.time())
+    remaining_seconds = max(0, SESSION_TIMEOUT_SECONDS - (_pytime.time() - last_activity))
+
     
     return {
         "active": True,
