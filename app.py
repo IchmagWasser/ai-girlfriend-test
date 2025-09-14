@@ -30,8 +30,12 @@ load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
 
 app = FastAPI()
+
+# Performance Monitoring Middleware HIER einfügen:
 performance_monitor = PerformanceMonitoringMiddleware(app, slow_threshold=2.0)
 app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
+
+# Dann erst die Session Middleware:
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -88,6 +92,8 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
     - Sammelt Statistiken
     - Speichert langsame Requests
     """
+    performance_monitor = PerformanceMonitoringMiddleware(app, slow_threshold=2.0)
+    app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
     
     def __init__(self, app, slow_threshold: float = 2.0):
         super().__init__(app)
