@@ -1165,6 +1165,87 @@ async def api_performance_stats(request: Request):
     if redirect:
         return {"error": "Session expired"}
     
+
+@app.get("/admin/analytics", response_class=HTMLResponse)
+async def admin_analytics(request: Request):
+    """Admin-Analytics Seite"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    # Benutzer-Statistiken sammeln
+    users = get_all_users()
+    total_users = len(users)
+    blocked_users = sum(1 for user in users.values() if user.get("blocked", False))
+    admin_users = sum(1 for user in users.values() if user.get("is_admin", False))
+    
+    # Subscription-Tier-Verteilung
+    tier_stats = {"free": 0, "pro": 0, "premium": 0}
+    for user in users.values():
+        tier = user.get("subscription_tier", "free")
+        if tier in tier_stats:
+            tier_stats[tier] += 1
+    
+    # Chat-Statistiken (falls verfügbar)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Gesamte Chat-Nachrichten
+        cursor.execute("SELECT COUNT(*) FROM chat_history")
+        total_messages = cursor.fetchone()[0]
+        
+        # Nachrichten pro Benutzer
+        cursor.execute("""
+            SELECT username, COUNT(*) as msg_count 
+            FROM chat_history 
+            GROUP BY username 
+            ORDER BY msg_count DESC 
+            LIMIT 10
+        """)
+        top_users = cursor.fetchall()
+        
+        # Nachrichten der letzten 7 Tage
+        cursor.execute("""
+            SELECT DATE(timestamp) as date, COUNT(*) as count 
+            FROM chat_history 
+            WHERE timestamp >= datetime('now', '-7 days')
+            GROUP BY DATE(timestamp)
+            ORDER BY date DESC
+        """)
+        daily_stats = cursor.fetchall()
+        
+        conn.close()
+        
+    except Exception as e:
+        total_messages = 0
+        top_users = []
+        daily_stats = []
+        logger.error(f"Analytics DB error: {e}")
+    
+    # Performance-Stats (falls Middleware aktiv)
+    perf_stats = {}
+    if hasattr(PerformanceMonitoringMiddleware, 'instance') and PerformanceMonitoringMiddleware.instance:
+        perf_stats = PerformanceMonitoringMiddleware.instance.get_stats()
+    
+    return templates.TemplateResponse("admin_analytics.html", {
+        "request": request,
+        "total_users": total_users,
+        "blocked_users": blocked_users,
+        "admin_users": admin_users,
+        "tier_stats": tier_stats,
+        "total_messages": total_messages,
+        "top_users": top_users,
+        "daily_stats": daily_stats,
+        "perf_stats": perf_stats,
+        "subscription_tiers": SUBSCRIPTION_TIERS
+    })   
+    
+
     return PerformanceMonitoringMiddleware.instance.get_stats()
 
 # ──────────────────────────────
