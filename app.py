@@ -20,6 +20,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Dict, List
 from collections import defaultdict, deque
 import time as _pytime
+import time
+import threading
+from functools import wraps, lru_cache
 
 from ollama_chat import get_response, get_response_with_messages
 
@@ -46,6 +49,109 @@ RATE_LIMIT_FILE = "rate_limits.json"
 MESSAGES_PER_HOUR = 50
 SESSION_TIMEOUT_MINUTES = 30
 SESSION_TIMEOUT_SECONDS = SESSION_TIMEOUT_MINUTES * 60
+
+# ──────────────────────────────
+# Enhanced Caching System
+# ──────────────────────────────
+
+class SimpleCache:
+    """Thread-safe Memory Cache mit TTL"""
+    
+    def __init__(self, default_ttl: int = 300):
+        self.cache = {}
+        self.ttl_data = {}
+        self.lock = threading.Lock()
+        self.default_ttl = default_ttl
+        
+    def get(self, key: str):
+        with self.lock:
+            if key in self.cache:
+                if time.time() < self.ttl_data.get(key, 0):
+                    return self.cache[key]
+                else:
+                    self.cache.pop(key, None)
+                    self.ttl_data.pop(key, None)
+            return None
+    
+    def set(self, key: str, value, ttl: int = None):
+        ttl = ttl or self.default_ttl
+        expire_time = time.time() + ttl
+        
+        with self.lock:
+            self.cache[key] = value
+            self.ttl_data[key] = expire_time
+    
+    def delete(self, key: str):
+        with self.lock:
+            self.cache.pop(key, None)
+            self.ttl_data.pop(key, None)
+    
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+            self.ttl_data.clear()
+    
+    def cleanup_expired(self):
+        current_time = time.time()
+        expired_keys = []
+        
+        with self.lock:
+            for key, expire_time in self.ttl_data.items():
+                if current_time >= expire_time:
+                    expired_keys.append(key)
+            
+            for key in expired_keys:
+                self.cache.pop(key, None)
+                self.ttl_data.pop(key, None)
+        
+        return len(expired_keys)
+    
+    def stats(self):
+        with self.lock:
+            return {
+                "total_entries": len(self.cache),
+                "memory_usage_mb": round(
+                    sum(len(str(v)) for v in self.cache.values()) / 1024 / 1024, 2
+                ),
+                "cache_keys": list(self.cache.keys())
+            }
+
+# Globaler Cache
+app_cache = SimpleCache(default_ttl=300)
+
+def cache_result(key_prefix: str, ttl: int = 300):
+    """Decorator für Funktions-Caching"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            cache_key = f"{key_prefix}:{':'.join(map(str, args))}"
+            if kwargs:
+                cache_key += f":{hash(frozenset(kwargs.items()))}"
+            
+            cached = app_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            
+            result = func(*args, **kwargs)
+            
+            if result is not None:
+                app_cache.set(cache_key, result, ttl)
+            
+            return result
+        return wrapper
+    return decorator
+
+def invalidate_user_cache(username: str):
+    """User-bezogene Cache-Einträge löschen"""
+    keys_to_delete = [
+        f"user:{username}",
+        f"user_persona:{username}",
+        f"user_tier:{username}",
+        f"available_personas:{username}"
+    ]
+    
+    for key in keys_to_delete:
+        app_cache.delete(key)
 
 # ──────────────────────────────
 # Subscription Tiers Definition
@@ -458,6 +564,58 @@ def get_user_history(username: str) -> list:
     
     return [{"role": row[0], "content": row[1], "timestamp": row[2]} for row in rows]
 
+# ──────────────────────────────
+# Cached Database Functions  
+# ──────────────────────────────
+
+@cache_result("user", ttl=600)
+def get_user_cached(username: str):
+    """Cached Version von get_user()"""
+    return get_user(username)
+
+@cache_result("user_persona", ttl=300)
+def get_user_persona_cached(username: str):
+    """Cached Version von get_user_persona()"""
+    return get_user_persona(username)
+
+@cache_result("user_tier", ttl=600)
+def get_user_subscription_tier_cached(username: str):
+    """Cached Version von get_user_subscription_tier()"""
+    return get_user_subscription_tier(username)
+
+@cache_result("available_personas", ttl=600)
+def get_available_personas_for_user_cached(username: str):
+    """Cached Version von get_available_personas_for_user()"""
+    return get_available_personas_for_user(username)
+
+@cache_result("all_users", ttl=120)
+def get_all_users_cached():
+    """Cached Version von get_all_users()"""
+    return get_all_users()
+
+# ==========================================
+# SCHRITT 4: ERWEITERTE FUNKTIONEN MIT CACHE-INVALIDATION
+# ==========================================
+# POSITION: Nach den obigen cached functions
+# EINFÜGEN:
+
+def save_user_persona_cached(username: str, persona: str):
+    """save_user_persona mit Cache-Invalidierung"""
+    save_user_persona(username, persona)
+    invalidate_user_cache(username)
+
+def set_user_subscription_tier_cached(username: str, tier: str):
+    """set_user_subscription_tier mit Cache-Invalidierung"""
+    set_user_subscription_tier(username, tier)
+    invalidate_user_cache(username)
+    app_cache.delete("all_users")
+
+def toggle_user_block_cached(username: str):
+    """toggle_user_block mit Cache-Invalidierung"""
+    toggle_user_block(username)
+    invalidate_user_cache(username)
+    app_cache.delete("all_users")
+
 def save_user_history(username: str, role: str, content: str):
     """Chat-Nachricht in DB speichern"""
     if not CHAT_TABLE_CREATED:
@@ -866,8 +1024,8 @@ async def chat_with_enhanced_limits(req: Request):
         return {"reply": "Leere Nachricht."}
     
     # Persona-Verfügbarkeit prüfen
-    current_persona = get_user_persona(username)
-    available_personas = get_available_personas_for_user(username)
+    current_persona = get_user_persona_cached(username)
+    available_personas = get_available_personas_for_user_cached(username)
     
     if current_persona not in available_personas:
         # Fallback zu Standard-Persona
@@ -929,11 +1087,11 @@ async def persona_settings(request: Request):
         return redirect
     
     username = request.session.get("username")
-    current_persona = get_user_persona(username)
-    user_tier = get_user_subscription_tier(username)
+    current_persona = get_user_persona_cached(username)
+    user_tier = get_user_subscription_tier_cached(username)
     
     # Verfügbare Personas für User-Tier
-    available_personas = get_available_personas_for_user(username)
+    available_personas = get_available_personas_for_user_cached(username)
     
     # Tier-Informationen
     tier_info = SUBSCRIPTION_TIERS.get(user_tier, SUBSCRIPTION_TIERS["free"])
@@ -957,10 +1115,10 @@ async def set_persona(request: Request, persona: str = Form(...)):
         return redirect
     
     username = request.session.get("username")
-    available_personas = get_available_personas_for_user(username)
+    available_personas = get_available_personas_for_user_cached(username)
     
     if persona in available_personas:
-        save_user_persona(username, persona)
+        save_user_persona_cached(username, persona)
         logger.info(f"[PERSONA] {username} wählte Persona: {persona}")
         return RedirectResponse("/chat", status_code=302)
     else:
@@ -991,7 +1149,7 @@ async def admin_page(request: Request):
     if redirect:
         return redirect
     
-    users = get_all_users()
+    users = get_all_users_cached()
     return templates.TemplateResponse("admin_users.html", {
         "request": request, 
         "users": users,
@@ -1005,10 +1163,33 @@ async def toggle_block_user(request: Request, username: str = Form(...)):
         return guard
     
     if username != "admin":  # Admin kann sich nicht selbst blockieren
-        toggle_user_block(username)
+        toggle_user_block_cached(username)
         logger.info(f"[ADMIN] User blockiert/freigeschaltet: {username}")
     
     return RedirectResponse("/admin", status_code=302)
+
+@app.get("/admin/cache-stats")
+async def cache_stats(request: Request):
+    """Cache-Statistiken für Admin"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    return {
+        "cache_stats": app_cache.stats(),
+        "cleanup_available": True
+    }
+
+@app.post("/admin/clear-cache")
+async def clear_cache(request: Request):
+    """Cache leeren (Admin)"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    app_cache.clear()
+    logger.info("[CACHE] Admin hat Cache geleert")
+    return {"message": "Cache geleert", "success": True}
 
 @app.post("/admin/change-tier")
 async def change_user_tier(request: Request, 
@@ -1020,7 +1201,7 @@ async def change_user_tier(request: Request,
         return guard
     
     if tier in SUBSCRIPTION_TIERS:
-        set_user_subscription_tier(username, tier)
+        set_user_subscription_tier_cached(username, tier)
         logger.info(f"[ADMIN] Subscription-Tier für {username} geändert zu: {tier}")
     
     return RedirectResponse("/admin", status_code=302)
@@ -1152,6 +1333,7 @@ async def admin_performance(request: Request):
     return templates.TemplateResponse("admin_performance.html", {
         "request": request,
         "stats": stats
+        "cache_stats": cache_stats 
     })
 
 @app.get("/api/performance-stats")
@@ -1274,4 +1456,22 @@ async def session_info(request: Request):
 @app.on_event("startup")
 def startup():
     init_db()
+    
+    # Cache-Cleanup Task starten
+    import asyncio
+    asyncio.create_task(cache_cleanup_background())
+    
     logger.info("[STARTUP] KI-Chat mit Subscription-System gestartet")
+    async def cache_cleanup_background():
+    """Background-Task für Cache-Bereinigung"""
+    await asyncio.sleep(60)  # Warten bis App vollständig gestartet
+    
+    while True:
+        try:
+            cleaned = app_cache.cleanup_expired()
+            if cleaned > 0:
+                logger.info(f"[CACHE] {cleaned} abgelaufene Einträge bereinigt")
+            await asyncio.sleep(300)  # Alle 5 Minuten
+        except Exception as e:
+            logger.error(f"[CACHE ERROR] {e}")
+            await asyncio.sleep(300)
