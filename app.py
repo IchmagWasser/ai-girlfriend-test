@@ -15,6 +15,7 @@ import html
 import hmac
 import json
 import re
+import asyncio
 from datetime import datetime
 from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Dict, List
@@ -593,11 +594,9 @@ def get_all_users_cached():
     """Cached Version von get_all_users()"""
     return get_all_users()
 
-# ==========================================
-# SCHRITT 4: ERWEITERTE FUNKTIONEN MIT CACHE-INVALIDATION
-# ==========================================
-# POSITION: Nach den obigen cached functions
-# EINFÜGEN:
+# ──────────────────────────────
+# Erweiterte Funktionen mit Cache-Invalidation
+# ──────────────────────────────
 
 def save_user_persona_cached(username: str, persona: str):
     """save_user_persona mit Cache-Invalidierung"""
@@ -608,13 +607,13 @@ def set_user_subscription_tier_cached(username: str, tier: str):
     """set_user_subscription_tier mit Cache-Invalidierung"""
     set_user_subscription_tier(username, tier)
     invalidate_user_cache(username)
-    app_cache.delete("all_users")
+    app_cache.delete("all_users:")
 
 def toggle_user_block_cached(username: str):
     """toggle_user_block mit Cache-Invalidierung"""
     toggle_user_block(username)
     invalidate_user_cache(username)
-    app_cache.delete("all_users")
+    app_cache.delete("all_users:")
 
 def save_user_history(username: str, role: str, content: str):
     """Chat-Nachricht in DB speichern"""
@@ -646,7 +645,11 @@ def toggle_user_block(username: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT is_blocked FROM users WHERE username = ?", (username,))
-    current = cursor.fetchone()[0]
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return
+    current = row[0]
     new_status = 0 if current else 1
     cursor.execute("UPDATE users SET is_blocked = ? WHERE username = ?", 
                    (new_status, username))
@@ -1030,7 +1033,7 @@ async def chat_with_enhanced_limits(req: Request):
     if current_persona not in available_personas:
         # Fallback zu Standard-Persona
         current_persona = "standard"
-        save_user_persona(username, current_persona)
+        save_user_persona_cached(username, current_persona)
     
     # User-Nachricht speichern
     save_user_history(username, "user", user_message)
@@ -1328,12 +1331,13 @@ async def admin_performance(request: Request):
     
     # Performance-Daten vom globalen Monitor holen
     stats = PerformanceMonitoringMiddleware.instance.get_stats()
-
+    cache_stats = app_cache.stats()
     
     return templates.TemplateResponse("admin_performance.html", {
         "request": request,
-        "stats": stats
-        "cache_stats": cache_stats 
+        "stats": stats,
+        "cache_stats": cache_stats
+    
     })
 
 @app.get("/api/performance-stats")
@@ -1347,6 +1351,7 @@ async def api_performance_stats(request: Request):
     if redirect:
         return {"error": "Session expired"}
     
+    return PerformanceMonitoringMiddleware.instance.get_stats()
 
 @app.get("/admin/analytics", response_class=HTMLResponse)
 async def admin_analytics(request: Request):
@@ -1426,9 +1431,6 @@ async def admin_analytics(request: Request):
         "perf_stats": perf_stats,
         "subscription_tiers": SUBSCRIPTION_TIERS
     })   
-    
-
-    return PerformanceMonitoringMiddleware.instance.get_stats()
 
 # ──────────────────────────────
 # API Routes
@@ -1441,7 +1443,6 @@ async def session_info(request: Request):
     
     last_activity = request.session.get("last_activity", _pytime.time())
     remaining_seconds = max(0, SESSION_TIMEOUT_SECONDS - (_pytime.time() - last_activity))
-
     
     return {
         "active": True,
@@ -1451,18 +1452,9 @@ async def session_info(request: Request):
     }
 
 # ──────────────────────────────
-# Startup
+# Background Tasks
 # ──────────────────────────────
-@app.on_event("startup")
-def startup():
-    init_db()
-    
-    # Cache-Cleanup Task starten
-    import asyncio
-    asyncio.create_task(cache_cleanup_background())
-    
-    logger.info("[STARTUP] KI-Chat mit Subscription-System gestartet")
-    async def cache_cleanup_background():
+async def cache_cleanup_background():
     """Background-Task für Cache-Bereinigung"""
     await asyncio.sleep(60)  # Warten bis App vollständig gestartet
     
@@ -1475,3 +1467,15 @@ def startup():
         except Exception as e:
             logger.error(f"[CACHE ERROR] {e}")
             await asyncio.sleep(300)
+
+# ──────────────────────────────
+# Startup
+# ──────────────────────────────
+@app.on_event("startup")
+async def startup():
+    init_db()
+    
+    # Cache-Cleanup Task starten
+    asyncio.create_task(cache_cleanup_background())
+    
+    logger.info("[STARTUP] KI-Chat mit Subscription-System gestartet")
