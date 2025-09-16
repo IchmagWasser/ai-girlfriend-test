@@ -1352,6 +1352,26 @@ async def api_performance_stats(request: Request):
     
     return PerformanceMonitoringMiddleware.instance.get_stats()
 
+@app.get("/admin/database", response_class=HTMLResponse)
+async def admin_database(request: Request):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+
+    # Hier kannst du später DB-Metriken berechnen und ins Template geben
+    ctx = {
+        "request": request,
+        # Beispielwerte; ersetze sie später durch echte Stats
+        "db_path": DB_PATH,
+        "sqlite_version": sqlite3.sqlite_version,
+    }
+    return templates.TemplateResponse("admin_database.html", ctx)
+
+
 @app.get("/admin/analytics", response_class=HTMLResponse)
 async def admin_analytics(request: Request):
     """Admin-Analytics Seite"""
