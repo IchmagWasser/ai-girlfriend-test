@@ -1,3 +1,4 @@
+# Alle Imports und Setup bleiben gleich...
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,17 +28,23 @@ from functools import wraps, lru_cache
 
 from ollama_chat import get_response, get_response_with_messages
 
-# ──────────────────────────────
-# Setup
-# ──────────────────────────────
+# Connection Pool Imports
+from database_pool import (
+    DatabaseManager, 
+    db_manager,
+    get_user_pooled,
+    get_all_users_pooled,
+    save_user_pooled,
+    get_database_performance_stats,
+    with_db_connection
+)
+
+# Setup (bleibt gleich)
 load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
 
 app = FastAPI()
-
-# Dann erst die Session Middleware:
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
-
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -51,13 +58,8 @@ MESSAGES_PER_HOUR = 50
 SESSION_TIMEOUT_MINUTES = 30
 SESSION_TIMEOUT_SECONDS = SESSION_TIMEOUT_MINUTES * 60
 
-# ──────────────────────────────
-# Enhanced Caching System
-# ──────────────────────────────
-
+# Cache System (bleibt gleich)
 class SimpleCache:
-    """Thread-safe Memory Cache mit TTL"""
-    
     def __init__(self, default_ttl: int = 300):
         self.cache = {}
         self.ttl_data = {}
@@ -117,11 +119,9 @@ class SimpleCache:
                 "cache_keys": list(self.cache.keys())
             }
 
-# Globaler Cache
 app_cache = SimpleCache(default_ttl=300)
 
 def cache_result(key_prefix: str, ttl: int = 300):
-    """Decorator für Funktions-Caching"""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -143,7 +143,6 @@ def cache_result(key_prefix: str, ttl: int = 300):
     return decorator
 
 def invalidate_user_cache(username: str):
-    """User-bezogene Cache-Einträge löschen"""
     keys_to_delete = [
         f"user:{username}",
         f"user_persona:{username}",
@@ -154,9 +153,7 @@ def invalidate_user_cache(username: str):
     for key in keys_to_delete:
         app_cache.delete(key)
 
-# ──────────────────────────────
-# Subscription Tiers Definition
-# ──────────────────────────────
+# Subscription Tiers & Personas (bleiben gleich)
 SUBSCRIPTION_TIERS = {
     "free": {
         "name": "Free",
@@ -174,14 +171,13 @@ SUBSCRIPTION_TIERS = {
     },
     "premium": {
         "name": "Premium",
-        "max_messages_per_hour": -1,  # Unlimited
-        "max_messages_per_day": -1,   # Unlimited
+        "max_messages_per_hour": -1,
+        "max_messages_per_day": -1,
         "available_personas": ["standard", "freundlich", "lustig", "professionell", "lehrerin", "kreativ", "analyst", "therapeut"],
         "features": ["Alle Personas", "Unbegrenzte Nachrichten", "Höchste Priorität", "Erweiterte Features"]
     }
 }
 
-# Enhanced Persona-Definitionen mit Tier-Zuordnung
 PERSONAS = {
     "standard": {
         "name": "Standard Assistent",
@@ -241,19 +237,9 @@ PERSONAS = {
     }
 }
 
-# ──────────────────────────────
-# Performance Monitoring Middleware
-# ──────────────────────────────
-
+# Performance Monitoring (bleibt gleich)
 class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware für Performance-Monitoring
-    - Misst Request-Zeiten
-    - Sammelt Statistiken
-    - Speichert langsame Requests
-    """
-
-    instance = None  # Statische Referenz auf die Instanz
+    instance = None
     
     def __init__(self, app, slow_threshold: float = 2.0):
         super().__init__(app)
@@ -261,44 +247,30 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
         self.stats = {
             'total_requests': 0,
             'total_time': 0.0,
-            'slow_requests': deque(maxlen=100),  # Letzte 100 langsame Requests
+            'slow_requests': deque(maxlen=100),
             'endpoint_stats': defaultdict(lambda: {'count': 0, 'total_time': 0.0}),
-            'last_requests': deque(maxlen=50)  # Letzte 50 Requests
+            'last_requests': deque(maxlen=50)
         }
-        PerformanceMonitoringMiddleware.instance = self  # Instanz merken
+        PerformanceMonitoringMiddleware.instance = self
 
     async def dispatch(self, request: Request, call_next):
         start_time = _pytime.time()
-
-        # Request verarbeiten
         response = await call_next(request)
-
-        # Performance messen
         process_time = _pytime.time() - start_time
-
-        # Statistiken aktualisieren
         self._update_stats(request, process_time)
-
-        # Performance-Header hinzufügen
         response.headers["X-Process-Time"] = str(round(process_time, 4))
-
         return response
 
     def _update_stats(self, request: Request, process_time: float):
-        """Interne Statistiken aktualisieren"""
         path = request.url.path
         method = request.method
         endpoint = f"{method} {path}"
 
-        # Global stats
         self.stats['total_requests'] += 1
         self.stats['total_time'] += process_time
-
-        # Endpoint stats
         self.stats['endpoint_stats'][endpoint]['count'] += 1
         self.stats['endpoint_stats'][endpoint]['total_time'] += process_time
 
-        # Langsame Requests tracken
         if process_time > self.slow_threshold:
             self.stats['slow_requests'].append({
                 'timestamp': _pytime.time(),
@@ -307,7 +279,6 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
                 'user_agent': request.headers.get('user-agent', 'Unknown')[:100]
             })
 
-        # Letzte Requests tracken
         self.stats['last_requests'].append({
             'timestamp': _pytime.time(),
             'endpoint': endpoint,
@@ -316,11 +287,9 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
         })
 
     def get_stats(self) -> Dict:
-        """Performance-Statistiken zurückgeben"""
         avg_time = (self.stats['total_time'] / self.stats['total_requests']
                    if self.stats['total_requests'] > 0 else 0)
 
-        # Endpoint-Statistiken aufbereiten
         endpoint_stats = []
         for endpoint, data in self.stats['endpoint_stats'].items():
             avg_endpoint_time = data['total_time'] / data['count']
@@ -331,7 +300,6 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
                 'total_time': round(data['total_time'], 4)
             })
 
-        # Nach durchschnittlicher Zeit sortieren
         endpoint_stats.sort(key=lambda x: x['avg_time'], reverse=True)
 
         return {
@@ -340,74 +308,66 @@ class PerformanceMonitoringMiddleware(BaseHTTPMiddleware):
             'total_time': round(self.stats['total_time'], 4),
             'slow_requests_count': len(self.stats['slow_requests']),
             'slow_threshold': self.slow_threshold,
-            'endpoint_stats': endpoint_stats[:10],  # Top 10 langsamste
-            'recent_slow_requests': list(self.stats['slow_requests'])[-10:],  # Letzte 10 langsame
-            'recent_requests': list(self.stats['last_requests'])[-20:]  # Letzte 20 allgemein
+            'endpoint_stats': endpoint_stats[:10],
+            'recent_slow_requests': list(self.stats['slow_requests'])[-10:],
+            'recent_requests': list(self.stats['last_requests'])[-20:]
         }
 
-# Middleware einbinden
 app.add_middleware(PerformanceMonitoringMiddleware, slow_threshold=2.0)
 
 # ──────────────────────────────
-# Database Helper Functions
+# Database Functions - KORRIGIERT
 # ──────────────────────────────
+
 def init_db():
-    """Initialisiert die Datenbank mit allen nötigen Tabellen"""
+    """Initialisiert die Datenbank mit Connection Pool"""
     global CHAT_TABLE_CREATED
     
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Users-Tabelle (konsistent mit deinem reset.py)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            username TEXT PRIMARY KEY,
-            password TEXT NOT NULL,
-            question TEXT NOT NULL,
-            answer TEXT NOT NULL,
-            is_admin INTEGER DEFAULT 0,
-            is_blocked INTEGER DEFAULT 0,
-            persona TEXT DEFAULT 'standard',
-            subscription_tier TEXT DEFAULT 'free'
-        )
-    """)
-    
-    # Chat-Verlauf Tabelle
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chat_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (username) REFERENCES users (username)
-        )
-    """)
-    
-    # Admin-User erstellen falls nicht existiert
-    cursor.execute("SELECT username FROM users WHERE username = ?", ("admin",))
-    if not cursor.fetchone():
-        admin_hash = hash_password("admin")
+    with db_manager.pool.get_connection() as conn:
+        cursor = conn.cursor()
+        
         cursor.execute("""
-            INSERT INTO users (username, password, question, answer, is_admin, subscription_tier) 
-            VALUES (?, ?, ?, ?, 1, 'premium')
-        """, ("admin", admin_hash, "Default Admin Question", "admin"))
-        logger.info("[INIT] Admin-User erstellt (admin/admin)")
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password TEXT NOT NULL,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                is_admin INTEGER DEFAULT 0,
+                is_blocked INTEGER DEFAULT 0,
+                persona TEXT DEFAULT 'standard',
+                subscription_tier TEXT DEFAULT 'free'
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (username) REFERENCES users (username)
+            )
+        """)
+        
+        cursor.execute("SELECT username FROM users WHERE username = ?", ("admin",))
+        if not cursor.fetchone():
+            admin_hash = hash_password("admin")
+            cursor.execute("""
+                INSERT INTO users (username, password, question, answer, is_admin, subscription_tier) 
+                VALUES (?, ?, ?, ?, 1, 'premium')
+            """, ("admin", admin_hash, "Default Admin Question", "admin"))
+            logger.info("[INIT] Admin-User erstellt (admin/admin)")
+        
+        conn.commit()
     
-    conn.commit()
-    conn.close()
     CHAT_TABLE_CREATED = True
-    logger.info("[INIT] Datenbank initialisiert")
+    logger.info("[INIT] Datenbank mit Connection Pool initialisiert")
 
 def hash_password(password: str) -> str:
-    """Passwort hashen"""
     return hashlib.sha256(password.encode()).hexdigest()
 
 def render_markdown_simple(text: str) -> str:
-    """
-    Einfaches Markdown-Rendering für Chat-Nachrichten
-    Unterstützt: Code-Blöcke, Inline-Code, Listen, Links, Fett/Kursiv
-    """
     # HTML escaping für Sicherheit
     text = html.escape(text)
     
@@ -462,68 +422,61 @@ def render_markdown_simple(text: str) -> str:
     
     return text
 
+# ──────────────────────────────
+# KORRIGIERT: Wrapper-Funktionen für Kompatibilität
+# ──────────────────────────────
+
 def get_user(username: str) -> dict:
-    """User aus DB holen"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        return {
-            "username": row[0],
-            "password": row[1],
-            "question": row[2],
-            "answer": row[3],
-            "is_admin": bool(row[4]),
-            "is_blocked": bool(row[5]),
-            "persona": row[6] if len(row) > 6 else "standard",
-            "subscription_tier": row[7] if len(row) > 7 else "free"
-        }
-    return None
+    """User aus DB holen - uses connection pool"""
+    return get_user_pooled(username)
 
 def get_all_users() -> dict:
-    """Alle User für Admin-Panel"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users")
-    rows = cursor.fetchall()
-    conn.close()
-    
-    users = {}
-    for row in rows:
-        users[row[0]] = {
-            "password": row[1],
-            "question": row[2],
-            "answer": row[3],
-            "is_admin": bool(row[4]),
-            "blocked": bool(row[5]),  # für Template-Kompatibilität
-            "subscription_tier": row[7] if len(row) > 7 else "free"
-        }
-    return users
+    """Alle User für Admin-Panel - uses connection pool"""
+    return get_all_users_pooled()
 
 def save_user(username: str, password: str, question: str, answer: str) -> bool:
-    """Neuen User registrieren"""
-    if get_user(username):
-        return False  # User existiert bereits
+    """Neuen User registrieren - uses connection pool"""
+    return save_user_pooled(username, password, question, answer)
+
+# Chat history functions mit Pool
+@with_db_connection(db_manager.pool)
+def get_user_history(conn, username: str) -> list:
+    """Chat-Verlauf mit Connection Pool aus DB laden"""
+    if not CHAT_TABLE_CREATED:
+        return []
     
-    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    cursor.execute("""
+        SELECT role, content, timestamp FROM chat_history 
+        WHERE username = ? ORDER BY timestamp ASC
+    """, (username,))
+    rows = cursor.fetchall()
     
-    try:
-        password_hash = hash_password(password)
-        cursor.execute("""
-            INSERT INTO users (username, password, question, answer, subscription_tier) 
-            VALUES (?, ?, ?, ?, 'free')
-        """, (username, password_hash, question, answer))
-        conn.commit()
-        logger.info(f"[REGISTER] Neuer User: {username}")
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
+    return [{"role": row["role"], "content": row["content"], "timestamp": row["timestamp"]} 
+            for row in rows]
+
+@with_db_connection(db_manager.pool)
+def save_user_history(conn, username: str, role: str, content: str):
+    """Chat-Nachricht mit Connection Pool in DB speichern"""
+    if not CHAT_TABLE_CREATED:
+        return
+        
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO chat_history (username, role, content) 
+        VALUES (?, ?, ?)
+    """, (username, role, content))
+    conn.commit()
+
+@with_db_connection(db_manager.pool)
+def delete_user_history(conn, username: str):
+    """Chat-Verlauf mit Connection Pool löschen"""
+    if not CHAT_TABLE_CREATED:
+        return
+        
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
+    conn.commit()
 
 def check_login(username: str, password: str) -> bool:
     """Login überprüfen"""
@@ -539,200 +492,93 @@ def verify_security_answer(username: str, answer: str) -> bool:
         return user["answer"] == answer
     return False
 
-def reset_password(username: str, new_password: str):
-    """Passwort zurücksetzen"""
-    conn = sqlite3.connect(DB_PATH)
+@with_db_connection(db_manager.pool)
+def reset_password(conn, username: str, new_password: str):
+    """Passwort zurücksetzen mit Connection Pool"""
     cursor = conn.cursor()
     password_hash = hash_password(new_password)
     cursor.execute("UPDATE users SET password = ? WHERE username = ?", 
                    (password_hash, username))
     conn.commit()
-    conn.close()
 
-def get_user_history(username: str) -> list:
-    """Chat-Verlauf aus DB laden"""
-    if not CHAT_TABLE_CREATED:
-        return []
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT role, content, timestamp FROM chat_history 
-        WHERE username = ? ORDER BY timestamp ASC
-    """, (username,))
-    rows = cursor.fetchall()
-    conn.close()
-    
-    return [{"role": row[0], "content": row[1], "timestamp": row[2]} for row in rows]
-
-# ──────────────────────────────
-# Cached Database Functions  
-# ──────────────────────────────
-
-@cache_result("user", ttl=600)
-def get_user_cached(username: str):
-    """Cached Version von get_user()"""
-    return get_user(username)
-
-@cache_result("user_persona", ttl=300)
-def get_user_persona_cached(username: str):
-    """Cached Version von get_user_persona()"""
-    return get_user_persona(username)
-
-@cache_result("user_tier", ttl=600)
-def get_user_subscription_tier_cached(username: str):
-    """Cached Version von get_user_subscription_tier()"""
-    return get_user_subscription_tier(username)
-
-@cache_result("available_personas", ttl=600)
-def get_available_personas_for_user_cached(username: str):
-    """Cached Version von get_available_personas_for_user()"""
-    return get_available_personas_for_user(username)
-
-@cache_result("all_users", ttl=120)
-def get_all_users_cached():
-    """Cached Version von get_all_users()"""
-    return get_all_users()
-
-# ──────────────────────────────
-# Erweiterte Funktionen mit Cache-Invalidation
-# ──────────────────────────────
-
-def save_user_persona_cached(username: str, persona: str):
-    """save_user_persona mit Cache-Invalidierung"""
-    save_user_persona(username, persona)
-    invalidate_user_cache(username)
-
-def set_user_subscription_tier_cached(username: str, tier: str):
-    """set_user_subscription_tier mit Cache-Invalidierung"""
-    set_user_subscription_tier(username, tier)
-    invalidate_user_cache(username)
-    app_cache.delete("all_users:")
-
-def toggle_user_block_cached(username: str):
-    """toggle_user_block mit Cache-Invalidierung"""
-    toggle_user_block(username)
-    invalidate_user_cache(username)
-    app_cache.delete("all_users:")
-
-def save_user_history(username: str, role: str, content: str):
-    """Chat-Nachricht in DB speichern"""
-    if not CHAT_TABLE_CREATED:
-        return
-        
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO chat_history (username, role, content) 
-        VALUES (?, ?, ?)
-    """, (username, role, content))
-    conn.commit()
-    conn.close()
-
-def delete_user_history(username: str):
-    """Chat-Verlauf löschen"""
-    if not CHAT_TABLE_CREATED:
-        return
-        
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
-    conn.commit()
-    conn.close()
-
-def toggle_user_block(username: str):
-    """User blockieren/entblockieren"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT is_blocked FROM users WHERE username = ?", (username,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return
-    current = row[0]
-    new_status = 0 if current else 1
-    cursor.execute("UPDATE users SET is_blocked = ? WHERE username = ?", 
-                   (new_status, username))
-    conn.commit()
-    conn.close()
-
-def delete_user_completely(username: str):
-    """User und alle Daten löschen"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE username = ?", (username,))
-    cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
-    conn.commit()
-    conn.close()
-
-def get_user_persona(username: str) -> str:
-    """Holt die gewählte Persona des Users"""
-    conn = sqlite3.connect(DB_PATH)
+# KORRIGIERT: Persona & Subscription Functions
+@with_db_connection(db_manager.pool)
+def get_user_persona(conn, username: str) -> str:
+    """Holt die gewählte Persona des Users mit Connection Pool"""
     cursor = conn.cursor()
     
     try:
         cursor.execute("SELECT persona FROM users WHERE username = ?", (username,))
         result = cursor.fetchone()
-        return result[0] if result and result[0] else "standard"
-    except sqlite3.OperationalError:
-        # Spalte existiert noch nicht
+        return result["persona"] if result and result["persona"] else "standard"
+    except Exception:
         return "standard"
-    finally:
-        conn.close()
 
-def save_user_persona(username: str, persona: str):
-    """Speichert die gewählte Persona des Users"""
-    conn = sqlite3.connect(DB_PATH)
+@with_db_connection(db_manager.pool)
+def save_user_persona(conn, username: str, persona: str):
+    """Speichert die gewählte Persona des Users mit Connection Pool"""
     cursor = conn.cursor()
     
-    # Prüfen ob users Tabelle persona Spalte hat, falls nicht hinzufügen
     cursor.execute("PRAGMA table_info(users)")
-    columns = [column[1] for column in cursor.fetchall()]
+    columns = [column["name"] for column in cursor.fetchall()]
     
     if 'persona' not in columns:
         cursor.execute("ALTER TABLE users ADD COLUMN persona TEXT DEFAULT 'standard'")
     
     cursor.execute("UPDATE users SET persona = ? WHERE username = ?", (persona, username))
     conn.commit()
-    conn.close()
 
-# ──────────────────────────────
-# Enhanced Subscription Functions
-# ──────────────────────────────
-def get_user_subscription_tier(username: str) -> str:
-    """Holt das Subscription-Tier des Users"""
-    conn = sqlite3.connect(DB_PATH)
+@with_db_connection(db_manager.pool)
+def get_user_subscription_tier(conn, username: str) -> str:
+    """Holt das Subscription-Tier des Users mit Connection Pool"""
     cursor = conn.cursor()
     
     try:
         cursor.execute("SELECT subscription_tier FROM users WHERE username = ?", (username,))
         result = cursor.fetchone()
-        return result[0] if result and result[0] else "free"
-    except sqlite3.OperationalError:
-        # Spalte existiert noch nicht - hinzufügen
+        return result["subscription_tier"] if result and result["subscription_tier"] else "free"
+    except Exception:
         cursor.execute("ALTER TABLE users ADD COLUMN subscription_tier TEXT DEFAULT 'free'")
         conn.commit()
         return "free"
-    finally:
-        conn.close()
 
-def set_user_subscription_tier(username: str, tier: str):
-    """Setzt das Subscription-Tier für einen User"""
+@with_db_connection(db_manager.pool)
+def set_user_subscription_tier(conn, username: str, tier: str):
+    """Setzt das Subscription-Tier für einen User mit Connection Pool"""
     if tier not in SUBSCRIPTION_TIERS:
         tier = "free"
     
-    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Sicherstellen, dass Spalte existiert
     try:
         cursor.execute("UPDATE users SET subscription_tier = ? WHERE username = ?", (tier, username))
-    except sqlite3.OperationalError:
+    except Exception:
         cursor.execute("ALTER TABLE users ADD COLUMN subscription_tier TEXT DEFAULT 'free'")
         cursor.execute("UPDATE users SET subscription_tier = ? WHERE username = ?", (tier, username))
     
     conn.commit()
-    conn.close()
+
+@with_db_connection(db_manager.pool)
+def toggle_user_block(conn, username: str):
+    """User blockieren/entblockieren mit Connection Pool"""
+    cursor = conn.cursor()
+    cursor.execute("SELECT is_blocked FROM users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    if not row:
+        return
+    current = row["is_blocked"]
+    new_status = 0 if current else 1
+    cursor.execute("UPDATE users SET is_blocked = ? WHERE username = ?", 
+                   (new_status, username))
+    conn.commit()
+
+@with_db_connection(db_manager.pool)
+def delete_user_completely(conn, username: str):
+    """User und alle Daten löschen mit Connection Pool"""
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+    cursor.execute("DELETE FROM chat_history WHERE username = ?", (username,))
+    conn.commit()
 
 def get_available_personas_for_user(username: str) -> dict:
     """Gibt verfügbare Personas basierend auf Subscription zurück"""
@@ -743,15 +589,56 @@ def get_available_personas_for_user(username: str) -> dict:
     return {key: persona for key, persona in PERSONAS.items() 
             if key in available_persona_keys}
 
+# ──────────────────────────────
+# Cache Functions - KORRIGIERT
+# ──────────────────────────────
+
+@cache_result("user", ttl=600)
+def get_user_cached(username: str):
+    return get_user_pooled(username)
+
+@cache_result("user_persona", ttl=300)
+def get_user_persona_cached(username: str):
+    return get_user_persona(username)
+
+@cache_result("user_tier", ttl=600)
+def get_user_subscription_tier_cached(username: str):
+    return get_user_subscription_tier(username)
+
+@cache_result("available_personas", ttl=600)
+def get_available_personas_for_user_cached(username: str):
+    return get_available_personas_for_user(username)
+
+@cache_result("all_users", ttl=120)
+def get_all_users_cached():
+    return get_all_users_pooled()
+
+# Cache invalidation functions - KORRIGIERT
+def save_user_persona_cached(username: str, persona: str):
+    save_user_persona(username, persona)
+    invalidate_user_cache(username)
+
+def set_user_subscription_tier_cached(username: str, tier: str):
+    set_user_subscription_tier(username, tier)
+    invalidate_user_cache(username)
+    app_cache.delete("all_users")  # KORRIGIERT: Entfernte den ":"
+
+def toggle_user_block_cached(username: str):
+    toggle_user_block(username)
+    invalidate_user_cache(username)
+    app_cache.delete("all_users")  # KORRIGIERT: Entfernte den ":"
+
+# ──────────────────────────────
+# Rate Limiting & Response Functions
+# ──────────────────────────────
+
 def check_enhanced_rate_limit(username: str) -> dict:
-    """Erweiterte Rate-Limit-Prüfung basierend auf Subscription"""
     user_tier = get_user_subscription_tier(username)
     tier_config = SUBSCRIPTION_TIERS.get(user_tier, SUBSCRIPTION_TIERS["free"])
     
     max_per_hour = tier_config["max_messages_per_hour"]
     max_per_day = tier_config["max_messages_per_day"]
     
-    # Unlimited für Premium
     if max_per_hour == -1:
         return {"allowed": True, "remaining_hour": "∞", "remaining_day": "∞"}
     
@@ -760,14 +647,12 @@ def check_enhanced_rate_limit(username: str) -> dict:
     
     user_data = limits.get(username, {"messages": [], "daily_messages": [], "last_reset": current_time})
     
-    # Alte Nachrichten entfernen
     hour_ago = current_time - 3600
     day_ago = current_time - 86400
     
     user_data["messages"] = [msg_time for msg_time in user_data["messages"] if msg_time > hour_ago]
     user_data["daily_messages"] = [msg_time for msg_time in user_data.get("daily_messages", []) if msg_time > day_ago]
     
-    # Prüfen
     hourly_used = len(user_data["messages"])
     daily_used = len(user_data["daily_messages"])
     
@@ -779,7 +664,6 @@ def check_enhanced_rate_limit(username: str) -> dict:
             "tier": user_tier
         }
     
-    # Neue Nachricht hinzufügen
     user_data["messages"].append(current_time)
     user_data["daily_messages"].append(current_time)
     limits[username] = user_data
@@ -793,20 +677,14 @@ def check_enhanced_rate_limit(username: str) -> dict:
     }
 
 def get_response_with_context(current_message: str, chat_history: list, persona: str = "standard") -> str:
-    """
-    Holt KI-Antwort mit Chat-Kontext und Persona
-    """
-    # Chat-Historie in das richtige Format für Ollama konvertieren
     messages = []
     
-    # System-Prompt basierend auf gewählter Persona
     persona_config = PERSONAS.get(persona, PERSONAS["standard"])
     messages.append({
         "role": "system", 
         "content": persona_config["system_prompt"]
     })
     
-    # Chat-Historie hinzufügen (letzte 20 Nachrichten für besseren Kontext)
     for msg in chat_history[-20:]:
         if msg["role"] in ["user", "assistant"]:
             messages.append({
@@ -814,18 +692,14 @@ def get_response_with_context(current_message: str, chat_history: list, persona:
                 "content": msg["content"]
             })
     
-    # Aktuelle Nachricht hinzufügen
     messages.append({
         "role": "user",
         "content": current_message
     })
     
-    # An get_response weitergeben
     return get_response_with_messages(messages)
 
-# Rate-Limiting Funktionen
 def load_rate_limits():
-    """Lädt Rate-Limit-Daten"""
     if os.path.exists(RATE_LIMIT_FILE):
         try:
             with open(RATE_LIMIT_FILE, 'r') as f:
@@ -835,39 +709,32 @@ def load_rate_limits():
     return {}
 
 def save_rate_limits(limits):
-    """Speichert Rate-Limit-Daten"""
     with open(RATE_LIMIT_FILE, 'w') as f:
         json.dump(limits, f)
 
 def check_rate_limit(username: str) -> bool:
-    """Prüft ob User Rate-Limit erreicht hat"""
     limits = load_rate_limits()
     current_time = _pytime.time()
     
     user_data = limits.get(username, {"messages": [], "last_reset": current_time})
     
-    # Alte Nachrichten entfernen (älter als 1 Stunde)
     hour_ago = current_time - 3600
     user_data["messages"] = [msg_time for msg_time in user_data["messages"] if msg_time > hour_ago]
     
-    # Prüfen ob Limit erreicht
     if len(user_data["messages"]) >= MESSAGES_PER_HOUR:
         return False
     
-    # Neue Nachricht hinzufügen
     user_data["messages"].append(current_time)
     limits[username] = user_data
     save_rate_limits(limits)
     
     return True
 
-# Session-Management
+# Session Management
 def update_session_activity(request: Request):
-    """Aktualisiert die letzte Aktivität in der Session"""
     request.session["last_activity"] = _pytime.time()
 
 def check_session_timeout(request: Request) -> bool:
-    """Prüft ob Session abgelaufen ist"""
     last_activity = request.session.get("last_activity")
     if not last_activity:
         return True
@@ -875,7 +742,6 @@ def check_session_timeout(request: Request) -> bool:
     return (_pytime.time() - last_activity) > SESSION_TIMEOUT_SECONDS
 
 def require_active_session(request: Request):
-    """Middleware-ähnliche Funktion für Session-Check"""
     if not request.session.get("username"):
         return RedirectResponse("/", status_code=302)
     
@@ -982,7 +848,6 @@ async def logout(request: Request):
 # ──────────────────────────────
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
-    # Session-Check
     redirect = require_active_session(request)
     if redirect:
         return redirect
@@ -999,14 +864,12 @@ async def chat_page(request: Request):
 
 @app.post("/chat")
 async def chat_with_enhanced_limits(req: Request):
-    """Chat mit erweiterten Rate-Limits basierend auf Subscription"""
     redirect = require_active_session(req)
     if redirect:
         return {"reply": "Session abgelaufen. Bitte neu anmelden.", "redirect": "/"}
     
     username = req.session.get("username")
     
-    # Erweiterte Rate-Limit-Prüfung
     rate_limit_result = check_enhanced_rate_limit(username)
     if not rate_limit_result["allowed"]:
         tier = rate_limit_result.get("tier", "free")
@@ -1026,29 +889,19 @@ async def chat_with_enhanced_limits(req: Request):
     if not user_message.strip():
         return {"reply": "Leere Nachricht."}
     
-    # Persona-Verfügbarkeit prüfen
     current_persona = get_user_persona_cached(username)
     available_personas = get_available_personas_for_user_cached(username)
     
     if current_persona not in available_personas:
-        # Fallback zu Standard-Persona
         current_persona = "standard"
         save_user_persona_cached(username, current_persona)
     
-    # User-Nachricht speichern
     save_user_history(username, "user", user_message)
-    
-    # Chat-Historie für Kontext laden
     history = get_user_history(username)
     
     try:
-        # Raw-Antwort von KI holen
         raw_response = get_response_with_context(user_message, history, current_persona)
-        
-        # Markdown rendern
         rendered_response = render_markdown_simple(raw_response)
-        
-        # Raw-Version in DB speichern (für Verlauf)
         save_user_history(username, "assistant", raw_response)
         
         return {
@@ -1066,14 +919,11 @@ async def chat_with_enhanced_limits(req: Request):
 
 @app.post("/chat/clear-history")
 async def clear_user_history(request: Request):
-    """User kann seinen eigenen Chat-Verlauf löschen"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
     username = request.session.get("username")
-    
-    # Chat-Verlauf für den User löschen
     delete_user_history(username)
     logger.info(f"[USER] {username} hat seinen Chat-Verlauf gelöscht")
     
@@ -1084,7 +934,6 @@ async def clear_user_history(request: Request):
 # ──────────────────────────────
 @app.get("/persona", response_class=HTMLResponse)
 async def persona_settings(request: Request):
-    """Persona-Einstellungen Seite mit Subscription-Support"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
@@ -1093,10 +942,7 @@ async def persona_settings(request: Request):
     current_persona = get_user_persona_cached(username)
     user_tier = get_user_subscription_tier_cached(username)
     
-    # Verfügbare Personas für User-Tier
     available_personas = get_available_personas_for_user_cached(username)
-    
-    # Tier-Informationen
     tier_info = SUBSCRIPTION_TIERS.get(user_tier, SUBSCRIPTION_TIERS["free"])
     
     return templates.TemplateResponse("persona.html", {
@@ -1112,7 +958,6 @@ async def persona_settings(request: Request):
 
 @app.post("/persona")
 async def set_persona(request: Request, persona: str = Form(...)):
-    """Persona auswählen mit Subscription-Prüfung"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
@@ -1125,7 +970,6 @@ async def set_persona(request: Request, persona: str = Form(...)):
         logger.info(f"[PERSONA] {username} wählte Persona: {persona}")
         return RedirectResponse("/chat", status_code=302)
     else:
-        # Persona nicht verfügbar für User-Tier
         return templates.TemplateResponse("persona.html", {
             "request": request,
             "username": username,
@@ -1147,7 +991,6 @@ async def admin_page(request: Request):
     if guard:
         return guard
     
-    # Session-Check auch für Admin
     redirect = require_active_session(request)
     if redirect:
         return redirect
@@ -1165,7 +1008,7 @@ async def toggle_block_user(request: Request, username: str = Form(...)):
     if guard:
         return guard
     
-    if username != "admin":  # Admin kann sich nicht selbst blockieren
+    if username != "admin":
         toggle_user_block_cached(username)
         logger.info(f"[ADMIN] User blockiert/freigeschaltet: {username}")
     
@@ -1173,7 +1016,6 @@ async def toggle_block_user(request: Request, username: str = Form(...)):
 
 @app.get("/admin/cache-stats")
 async def cache_stats(request: Request):
-    """Cache-Statistiken für Admin"""
     guard = admin_redirect_guard(request)
     if guard:
         return guard
@@ -1185,7 +1027,6 @@ async def cache_stats(request: Request):
 
 @app.post("/admin/clear-cache")
 async def clear_cache(request: Request):
-    """Cache leeren (Admin)"""
     guard = admin_redirect_guard(request)
     if guard:
         return guard
@@ -1198,7 +1039,6 @@ async def clear_cache(request: Request):
 async def change_user_tier(request: Request, 
                           username: str = Form(...),
                           tier: str = Form(...)):
-    """Admin kann User-Subscription-Tier ändern"""
     guard = admin_redirect_guard(request)
     if guard:
         return guard
@@ -1250,7 +1090,7 @@ async def delete_user(request: Request, username: str = Form(...)):
     if guard:
         return guard
     
-    if username != "admin":  # Admin kann sich nicht selbst löschen
+    if username != "admin":
         delete_user_completely(username)
         logger.info(f"[ADMIN] User gelöscht: {username}")
     
@@ -1264,7 +1104,7 @@ async def change_user_password(request: Request,
     if guard:
         return guard
     
-    if username != "admin":  # Admin-Passwort separat ändern
+    if username != "admin":
         reset_password(username, new_password)
         logger.info(f"[ADMIN] Passwort geändert für: {username}")
     
@@ -1319,17 +1159,14 @@ async def export_csv():
 
 @app.get("/admin/performance", response_class=HTMLResponse)
 async def admin_performance(request: Request):
-    """Admin-Seite für Performance-Monitoring"""
     guard = admin_redirect_guard(request)
     if guard:
         return guard
     
-    # Session-Check auch für Admin
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
-    # Performance-Daten vom globalen Monitor holen
     stats = PerformanceMonitoringMiddleware.instance.get_stats()
     cache_stats = app_cache.stats()
     
@@ -1341,7 +1178,6 @@ async def admin_performance(request: Request):
 
 @app.get("/api/performance-stats")
 async def api_performance_stats(request: Request):
-    """API für Performance-Statistiken (für AJAX-Updates)"""
     guard = admin_redirect_guard(request)
     if guard:
         return {"error": "Unauthorized"}
@@ -1353,75 +1189,36 @@ async def api_performance_stats(request: Request):
     return PerformanceMonitoringMiddleware.instance.get_stats()
 
 @app.get("/admin/database", response_class=HTMLResponse)
-async def admin_database(request: Request):
+async def admin_database_stats(request: Request):
     guard = admin_redirect_guard(request)
     if guard:
         return guard
-
+    
     redirect = require_active_session(request)
     if redirect:
         return redirect
-
-    # --- SQLite-Stats einsammeln ---
-    stats = {}
-    try:
-        size_bytes = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-
-        def fetch_one(sql):
-            try:
-                cur.execute(sql)
-                row = cur.fetchone()
-                return row[0] if row else None
-            except Exception:
-                return None
-
-        # PRAGMAs / Infos
-        stats["sqlite_version"]   = sqlite3.sqlite_version
-        stats["page_count"]       = fetch_one("PRAGMA page_count;")
-        stats["page_size"]        = fetch_one("PRAGMA page_size;")
-        stats["freelist_count"]   = fetch_one("PRAGMA freelist_count;")
-        stats["journal_mode"]     = fetch_one("PRAGMA journal_mode;")
-        stats["wal_autocheckpoint"]= fetch_one("PRAGMA wal_autocheckpoint;")
-        stats["cache_size"]       = fetch_one("PRAGMA cache_size;")
-        stats["synchronous"]      = fetch_one("PRAGMA synchronous;")
-        stats["foreign_keys"]     = fetch_one("PRAGMA foreign_keys;")
-        stats["locking_mode"]     = fetch_one("PRAGMA locking_mode;")
-        stats["db_size_bytes"]    = size_bytes
-        stats["db_size_mb"]       = round((size_bytes or 0) / (1024*1024), 2)
-
-        # Tabellen + Zeilenzahlen (optional)
-        try:
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-            tables = [r[0] for r in cur.fetchall()]
-            table_counts = {}
-            for t in tables:
-                try:
-                    cur.execute(f"SELECT COUNT(*) FROM {t}")
-                    table_counts[t] = cur.fetchone()[0]
-                except Exception:
-                    table_counts[t] = None
-            stats["tables"] = table_counts
-        except Exception:
-            stats["tables"] = {}
-
-        conn.close()
-    except Exception as e:
-        logger.error(f"/admin/database stats error: {e}")
-
-    ctx = {
+    
+    db_stats = get_database_performance_stats()
+    
+    return templates.TemplateResponse("admin_database.html", {
         "request": request,
-        "db_stats": stats,              # <-- WICHTIG
-        "db_path": DB_PATH,
-    }
-    return templates.TemplateResponse("admin_database.html", ctx)
+        "db_stats": db_stats
+    })
 
-
+@app.get("/api/database-stats")
+async def api_database_stats(request: Request):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return {"error": "Unauthorized"}
+    
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    return get_database_performance_stats()
 
 @app.get("/admin/analytics", response_class=HTMLResponse)
 async def admin_analytics(request: Request):
-    """Admin-Analytics Seite"""
     guard = admin_redirect_guard(request)
     if guard:
         return guard
@@ -1430,49 +1227,41 @@ async def admin_analytics(request: Request):
     if redirect:
         return redirect
     
-    # Benutzer-Statistiken sammeln
     users = get_all_users()
     total_users = len(users)
     blocked_users = sum(1 for user in users.values() if user.get("blocked", False))
     admin_users = sum(1 for user in users.values() if user.get("is_admin", False))
     
-    # Subscription-Tier-Verteilung
     tier_stats = {"free": 0, "pro": 0, "premium": 0}
     for user in users.values():
         tier = user.get("subscription_tier", "free")
         if tier in tier_stats:
             tier_stats[tier] += 1
     
-    # Chat-Statistiken (falls verfügbar)
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # Gesamte Chat-Nachrichten
-        cursor.execute("SELECT COUNT(*) FROM chat_history")
-        total_messages = cursor.fetchone()[0]
-        
-        # Nachrichten pro Benutzer
-        cursor.execute("""
-            SELECT username, COUNT(*) as msg_count 
-            FROM chat_history 
-            GROUP BY username 
-            ORDER BY msg_count DESC 
-            LIMIT 10
-        """)
-        top_users = cursor.fetchall()
-        
-        # Nachrichten der letzten 7 Tage
-        cursor.execute("""
-            SELECT DATE(timestamp) as date, COUNT(*) as count 
-            FROM chat_history 
-            WHERE timestamp >= datetime('now', '-7 days')
-            GROUP BY DATE(timestamp)
-            ORDER BY date DESC
-        """)
-        daily_stats = cursor.fetchall()
-        
-        conn.close()
+        with db_manager.pool.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM chat_history")
+            total_messages = cursor.fetchone()[0]
+            
+            cursor.execute("""
+                SELECT username, COUNT(*) as msg_count 
+                FROM chat_history 
+                GROUP BY username 
+                ORDER BY msg_count DESC 
+                LIMIT 10
+            """)
+            top_users = cursor.fetchall()
+            
+            cursor.execute("""
+                SELECT DATE(timestamp) as date, COUNT(*) as count 
+                FROM chat_history 
+                WHERE timestamp >= datetime('now', '-7 days')
+                GROUP BY DATE(timestamp)
+                ORDER BY date DESC
+            """)
+            daily_stats = cursor.fetchall()
         
     except Exception as e:
         total_messages = 0
@@ -1480,7 +1269,6 @@ async def admin_analytics(request: Request):
         daily_stats = []
         logger.error(f"Analytics DB error: {e}")
     
-    # Performance-Stats (falls Middleware aktiv)
     perf_stats = {}
     if hasattr(PerformanceMonitoringMiddleware, 'instance') and PerformanceMonitoringMiddleware.instance:
         perf_stats = PerformanceMonitoringMiddleware.instance.get_stats()
@@ -1503,7 +1291,6 @@ async def admin_analytics(request: Request):
 # ──────────────────────────────
 @app.get("/api/session-info")
 async def session_info(request: Request):
-    """API für Session-Status"""
     if not request.session.get("username"):
         return {"active": False}
     
@@ -1521,27 +1308,28 @@ async def session_info(request: Request):
 # Background Tasks
 # ──────────────────────────────
 async def cache_cleanup_background():
-    """Background-Task für Cache-Bereinigung"""
-    await asyncio.sleep(60)  # Warten bis App vollständig gestartet
+    await asyncio.sleep(60)
     
     while True:
         try:
             cleaned = app_cache.cleanup_expired()
             if cleaned > 0:
                 logger.info(f"[CACHE] {cleaned} abgelaufene Einträge bereinigt")
-            await asyncio.sleep(300)  # Alle 5 Minuten
+            await asyncio.sleep(300)
         except Exception as e:
             logger.error(f"[CACHE ERROR] {e}")
             await asyncio.sleep(300)
 
 # ──────────────────────────────
-# Startup
+# Startup & Shutdown
 # ──────────────────────────────
 @app.on_event("startup")
 async def startup():
     init_db()
-    
-    # Cache-Cleanup Task starten
     asyncio.create_task(cache_cleanup_background())
-    
-    logger.info("[STARTUP] KI-Chat mit Subscription-System gestartet")
+    logger.info("[STARTUP] KI-Chat mit Connection Pool gestartet")
+
+@app.on_event("shutdown")
+async def shutdown():
+    db_manager.close()
+    logger.info("[SHUTDOWN] Connection Pool geschlossen")
