@@ -1362,14 +1362,61 @@ async def admin_database(request: Request):
     if redirect:
         return redirect
 
-    # Hier kannst du später DB-Metriken berechnen und ins Template geben
+    # --- SQLite-Stats einsammeln ---
+    stats = {}
+    try:
+        size_bytes = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        def fetch_one(sql):
+            try:
+                cur.execute(sql)
+                row = cur.fetchone()
+                return row[0] if row else None
+            except Exception:
+                return None
+
+        # PRAGMAs / Infos
+        stats["sqlite_version"]   = sqlite3.sqlite_version
+        stats["page_count"]       = fetch_one("PRAGMA page_count;")
+        stats["page_size"]        = fetch_one("PRAGMA page_size;")
+        stats["freelist_count"]   = fetch_one("PRAGMA freelist_count;")
+        stats["journal_mode"]     = fetch_one("PRAGMA journal_mode;")
+        stats["wal_autocheckpoint"]= fetch_one("PRAGMA wal_autocheckpoint;")
+        stats["cache_size"]       = fetch_one("PRAGMA cache_size;")
+        stats["synchronous"]      = fetch_one("PRAGMA synchronous;")
+        stats["foreign_keys"]     = fetch_one("PRAGMA foreign_keys;")
+        stats["locking_mode"]     = fetch_one("PRAGMA locking_mode;")
+        stats["db_size_bytes"]    = size_bytes
+        stats["db_size_mb"]       = round((size_bytes or 0) / (1024*1024), 2)
+
+        # Tabellen + Zeilenzahlen (optional)
+        try:
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+            tables = [r[0] for r in cur.fetchall()]
+            table_counts = {}
+            for t in tables:
+                try:
+                    cur.execute(f"SELECT COUNT(*) FROM {t}")
+                    table_counts[t] = cur.fetchone()[0]
+                except Exception:
+                    table_counts[t] = None
+            stats["tables"] = table_counts
+        except Exception:
+            stats["tables"] = {}
+
+        conn.close()
+    except Exception as e:
+        logger.error(f"/admin/database stats error: {e}")
+
     ctx = {
         "request": request,
-        # Beispielwerte; ersetze sie später durch echte Stats
+        "db_stats": stats,              # <-- WICHTIG
         "db_path": DB_PATH,
-        "sqlite_version": sqlite3.sqlite_version,
     }
     return templates.TemplateResponse("admin_database.html", ctx)
+
 
 
 @app.get("/admin/analytics", response_class=HTMLResponse)
