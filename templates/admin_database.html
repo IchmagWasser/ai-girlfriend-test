@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Performance - Admin Panel</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        
+        .nav-tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 2px solid #dee2e6;
+        }
+        
+        .nav-tab {
+            flex: 1;
+            padding: 15px 20px;
+            text-align: center;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.1rem;
+            transition: all 0.3s ease;
+            border-bottom: 3px solid transparent;
+        }
+        
+        .nav-tab.active {
+            background: white;
+            border-bottom-color: #007bff;
+            color: #007bff;
+        }
+        
+        .nav-tab:hover {
+            background: #e9ecef;
+        }
+        
+        .tab-content {
+            display: none;
+            padding: 30px;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .stat-card .icon {
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+        }
+        
+        .stat-card .value {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .stat-card .label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        
+        .performance-chart {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+        }
+        
+        .performance-chart h3 {
+            color: #495057;
+            margin-bottom: 20px;
+            font-size: 1.3rem;
+        }
+        
+        .connection-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .connection-table th {
+            background: #f8f9fa;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #495057;
+            border-bottom: 2px solid #dee2e6;
+        }
+        
+        .connection-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .connection-table tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+        
+        .status-active {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-idle {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .refresh-btn {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(40, 167, 69, 0.4);
+        }
+        
+        .back-link {
+            display: inline-block;
+            background: linear-gradient(135deg, #6c757d, #495057);
+            color: white;
+            padding: 12px 25px;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .back-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(108, 117, 125, 0.4);
+            color: white;
+            text-decoration: none;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            border-radius: 10px;
+            transition: width 0.3s ease;
+        }
+        
+        .alert {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left: 4px solid #17a2b8;
+        }
+        
+        .metrics-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        @media (max-width: 768px) {
+            .metrics-row {
+                grid-template-columns: 1fr;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .nav-tabs {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-database"></i> Database Performance Monitor</h1>
+            <p>SQLite Connection Pool & Performance Analytics</p>
+        </div>
+        
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="showTab('overview')">
+                <i class="fas fa-chart-line"></i> Overview
+            </button>
+            <button class="nav-tab" onclick="showTab('connections')">
+                <i class="fas fa-network-wired"></i> Connections
+            </button>
+            <button class="nav-tab" onclick="showTab('queries')">
+                <i class="fas fa-search"></i> Query Stats
+            </button>
+            <button class="nav-tab" onclick="showTab('health')">
+                <i class="fas fa-heartbeat"></i> Health Check
+            </button>
+        </div>
+        
+        <!-- Overview Tab -->
+        <div id="overview" class="tab-content active">
+            <a href="/admin" class="back-link">
+                <i class="fas fa-arrow-left"></i> Zurück zum Admin Panel
+            </a>
+            
+            <button class="refresh-btn" onclick="refreshStats()">
+                <i class="fas fa-sync-alt"></i> Aktualisieren
+            </button>
+            
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="icon"><i class="fas fa-plug"></i></div>
+                    <div class="value">{{ db_stats.connection_pool.total_connections }}</div>
+                    <div class="label">Total Connections</div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="icon"><i class="fas fa-bolt"></i></div>
+                    <div class="value">{{ db_stats.connection_pool.active_connections }}</div>
+                    <div class="label">Active Connections</div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="icon"><i class="fas fa-clock"></i></div>
+                    <div class="value">{{ db_stats.connection_pool.average_query_time_ms }}ms</div>
+                    <div class="label">Avg Query Time</div>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="icon"><i class="fas fa-percentage"></i></div>
+                    <div class="value">{{ "%.1f"|format(db_stats.connection_pool.pool_hit_rate) }}%</div>
+                    <div class="label">Pool Hit Rate</div>
+                </div>
+            </div>
+            
+            <div class="metrics-row">
+                <div class="performance-chart">
+                    <h3><i class="fas fa-tachometer-alt"></i> Pool Usage</h3>
+                    <p><strong>Active:</strong> {{ db_stats.connection_pool.active_connections }}</p>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: {{ (db_stats.connection_pool.active_connections / db_stats.connection_pool.max_connections * 100)|round }}%"></div>
+                    </div>
+                    <p><small>{{ db_stats.connection_pool.active_connections }} / {{ db_stats.connection_pool.max_connections }} Connections verwendet</small></p>
+                </div>
+                
+                <div class="performance-chart">
+                    <h3><i class="fas fa-chart-bar"></i> Query Statistics</h3>
+                    <p><strong>Total Queries:</strong> {{ db_stats.connection_pool.total_queries_executed }}</p>
+                    <p><strong>Total Connections Created:</strong> {{ db_stats.connection_pool.total_connections_created }}</p>
+                    <p><strong>Pool Size:</strong> {{ db_stats.connection_pool.pool_size }}</p>
+                </div>
+            </div>
+            
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle"></i>
+                <strong>Database Info:</strong> {{ db_stats.database_path }} | Pool Type: {{ db_stats.pool_type }}
+            </div>
+        </div>
+        
+        <!-- Connections Tab -->
+        <div id="connections" class="tab-content">
+            <h2><i class="fas fa-network-wired"></i> Active Connections</h2>
+            
+            <table class="connection-table">
+                <thead>
+                    <tr>
+                        <th>Connection ID</th>
+                        <th>Status</th>
+                        <th>Age (Minutes)</th>
+                        <th>Query Count</th>
+                        <th>Last Used</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for conn in db_stats.connection_pool.connection_details %}
+                    <tr>
+                        <td><code>{{ conn.id }}</code></td>
+                        <td>
+                            {% if conn.in_use %}
+                                <span class="status-badge status-active">Active</span>
+                            {% else %}
+                                <span class="status-badge status-idle">Idle</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ conn.age_minutes }}</td>
+                        <td>{{ conn.query_count }}</td>
+                        <td>{{ "%.2f"|format(conn.last_used) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Query Stats Tab -->
+        <div id="queries" class="tab-content">
+            <h2><i class="fas fa-search"></i> Query Performance</h2>
+            
+            <div class="stats-grid">
+                <div class="performance-chart">
+                    <h3>Query Metrics</h3>
+                    <p><strong>Total Executed:</strong> {{ db_stats.connection_pool.total_queries_executed }}</p>
+                    <p><strong>Average Time:</strong> {{ db_stats.connection_pool.average_query_time_ms }}ms</p>
+                    <p><strong>Pool Hit Rate:</strong> {{ "%.2f"|format(db_stats.connection_pool.pool_hit_rate) }}%</p>
+                </div>
+                
+                <div class="performance-chart">
+                    <h3>Connection Pool Stats</h3>
+                    <p><strong>Available:</strong> {{ db_stats.connection_pool.available_connections }}</p>
+                    <p><strong>Pool Queue Size:</strong> {{ db_stats.connection_pool.pool_size }}</p>
+                    <p><strong>Max Connections:</strong> {{ db_stats.connection_pool.max_connections }}</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Health Check Tab -->
+        <div id="health" class="tab-content">
+            <h2><i class="fas fa-heartbeat"></i> System Health</h2>
+            
+            <div class="performance-chart">
+                <h3>Connection Pool Health</h3>
+                
+                {% set hit_rate = db_stats.connection_pool.pool_hit_rate %}
+                {% if hit_rate >= 80 %}
+                    <div class="alert" style="background: #d4edda; color: #155724;">
+                        <i class="fas fa-check-circle"></i> Pool Performance: Excellent ({{ "%.1f"|format(hit_rate) }}% Hit Rate)
+                    </div>
+                {% elif hit_rate >= 60 %}
+                    <div class="alert" style="background: #fff3cd; color: #856404;">
+                        <i class="fas fa-exclamation-triangle"></i> Pool Performance: Good ({{ "%.1f"|format(hit_rate) }}% Hit Rate)
+                    </div>
+                {% else %}
+                    <div class="alert" style="background: #f8d7da; color: #721c24;">
+                        <i class="fas fa-times-circle"></i> Pool Performance: Needs Attention ({{ "%.1f"|format(hit_rate) }}% Hit Rate)
+                    </div>
+                {% endif %}
+                
+                <p><strong>Recommendations:</strong></p>
+                <ul>
+                    {% if db_stats.connection_pool.active_connections == db_stats.connection_pool.max_connections %}
+                        <li>Consider increasing max_connections - pool is at capacity</li>
+                    {% endif %}
+                    
+                    {% if db_stats.connection_pool.average_query_time_ms > 100 %}
+                        <li>Query optimization recommended - average time is {{ db_stats.connection_pool.average_query_time_ms }}ms</li>
+                    {% endif %}
+                    
+                    {% if hit_rate < 70 %}
+                        <li>Pool hit rate is low - consider increasing pool size or adjusting timeouts</li>
+                    {% endif %}
+                    
+                    {% if db_stats.connection_pool.total_connections < 3 %}
+                        <li>System appears healthy - no immediate actions needed</li>
+                    {% endif %}
+                </ul>
+            </div>
+            
+            <div class="performance-chart">
+                <h3>Database File Info</h3>
+                <p><strong>Path:</strong> <code>{{ db_stats.database_path }}</code></p>
+                <p><strong>Pool Type:</strong> {{ db_stats.pool_type }}</p>
+                <p><strong>Connection Management:</strong> Automatic with cleanup</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active from all nav tabs
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        async function refreshStats() {
+            const button = document.querySelector('.refresh-btn');
+            const originalText = button.innerHTML;
+            
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Aktualisiere...';
+            button.disabled = true;
+            
+            try {
+                const response = await fetch('/api/database-stats');
+                if (response.ok) {
+                    location.reload();
+                } else {
+                    alert('Fehler beim Aktualisieren der Statistiken');
+                }
+            } catch (error) {
+                alert('Netzwerkfehler: ' + error.message);
+            } finally {
+                button.innerHTML = originalText;
+                button.disabled = false;
+            }
+        }
+        
+        // Auto-refresh every 30 seconds
+        setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                fetch('/api/database-stats')
+                    .then(response => response.json())
+                    .then(data => {
+                        // Update stats without full page reload
+                        console.log('Stats updated', data);
+                    })
+                    .catch(console.error);
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
