@@ -1337,7 +1337,6 @@ async def admin_performance(request: Request):
         "request": request,
         "stats": stats,
         "cache_stats": cache_stats
-    
     })
 
 @app.get("/api/performance-stats")
@@ -1430,7 +1429,7 @@ async def admin_analytics(request: Request):
         "daily_stats": daily_stats,
         "perf_stats": perf_stats,
         "subscription_tiers": SUBSCRIPTION_TIERS
-    })   
+    })
 
 # ──────────────────────────────
 # API Routes
