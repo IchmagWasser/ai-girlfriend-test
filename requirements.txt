@@ -5,7 +5,7 @@ openai==0.28.0
 requests
 chromadb==1.0.3
 itsdangerous
-python-multipart==0.0.6
+python-multipart==0.0.9
 jinja2==3.1.2
 python-dotenv==1.0.0
 structlog==23.2.0
@@ -17,4 +17,7 @@ psutil
 python-magic
 Pillow
 PyPDF2
-python-docx
+python-docs
+
+
+bcrypt>=4.1.3
