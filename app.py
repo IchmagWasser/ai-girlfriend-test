@@ -34,6 +34,348 @@ from enum import Enum
 import traceback
 import uuid
 
+def upgrade_database_for_threading():
+    """Erweitert die Datenbank um Threading-Support"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Prüfen ob thread_id Spalte bereits existiert
+        cursor.execute("PRAGMA table_info(chat_history)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'thread_id' not in columns:
+            # Thread-ID Spalte hinzufügen
+            cursor.execute("ALTER TABLE chat_history ADD COLUMN thread_id TEXT DEFAULT 'default'")
+            
+            # Bestehende Nachrichten auf 'default' Thread setzen
+            cursor.execute("UPDATE chat_history SET thread_id = 'default' WHERE thread_id IS NULL")
+            
+            logger.info("[THREADING] Database upgraded with thread_id column")
+        
+        # Threads-Tabelle erstellen
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_threads (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                message_count INTEGER DEFAULT 0,
+                is_archived INTEGER DEFAULT 0,
+                FOREIGN KEY (username) REFERENCES users (username)
+            )
+        """)
+        
+        # Default-Thread für alle User erstellen (falls nicht vorhanden)
+        cursor.execute("""
+            INSERT OR IGNORE INTO chat_threads (id, username, title, message_count)
+            SELECT 'default', username, 'Haupt-Unterhaltung', 
+                   (SELECT COUNT(*) FROM chat_history WHERE chat_history.username = users.username AND thread_id = 'default')
+            FROM users
+        """)
+        
+        conn.commit()
+        logger.info("[THREADING] Threading system database setup complete")
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Database upgrade error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+# ──────────────────────────────
+# Thread Management Functions
+# ──────────────────────────────
+
+def create_new_thread(username: str, title: str = None) -> str:
+    """Erstellt einen neuen Chat-Thread"""
+    thread_id = str(uuid.uuid4())[:8]  # Kurze IDs für bessere UX
+    
+    if not title:
+        # Auto-Titel basierend auf aktueller Zeit
+        title = f"Chat {datetime.now().strftime('%d.%m. %H:%M')}"
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT INTO chat_threads (id, username, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (thread_id, username, title, datetime.now(), datetime.now()))
+        
+        conn.commit()
+        logger.info(f"[THREADING] New thread created: {thread_id} for {username}")
+        return thread_id
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error creating thread: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def get_user_threads(username: str) -> List[Dict]:
+    """Holt alle Threads eines Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT t.id, t.title, t.created_at, t.updated_at, t.message_count, t.is_archived,
+                   (SELECT content FROM chat_history 
+                    WHERE username = ? AND thread_id = t.id AND role = 'user' 
+                    ORDER BY timestamp DESC LIMIT 1) as last_message
+            FROM chat_threads t 
+            WHERE t.username = ? 
+            ORDER BY t.updated_at DESC
+        """, (username, username))
+        
+        rows = cursor.fetchall()
+        
+        threads = []
+        for row in rows:
+            threads.append({
+                'id': row[0],
+                'title': row[1],
+                'created_at': datetime.fromisoformat(row[2]) if row[2] else datetime.now(),
+                'updated_at': datetime.fromisoformat(row[3]) if row[3] else datetime.now(),
+                'message_count': row[4] or 0,
+                'is_archived': bool(row[5]),
+                'last_message': row[6] or "Keine Nachrichten"
+            })
+        
+        return threads
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error getting threads for {username}: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_thread_history(username: str, thread_id: str) -> List[Dict]:
+    """Holt Chat-Verlauf für einen bestimmten Thread"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT role, content, timestamp FROM chat_history 
+            WHERE username = ? AND thread_id = ? 
+            ORDER BY timestamp ASC
+        """, (username, thread_id))
+        
+        rows = cursor.fetchall()
+        return [{"role": row[0], "content": row[1], "timestamp": row[2]} for row in rows]
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error getting thread history: {e}")
+        return []
+    finally:
+        conn.close()
+
+def save_message_to_thread(username: str, thread_id: str, role: str, content: str):
+    """Speichert Nachricht in einem bestimmten Thread"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Nachricht speichern
+        cursor.execute("""
+            INSERT INTO chat_history (username, role, content, thread_id) 
+            VALUES (?, ?, ?, ?)
+        """, (username, role, content, thread_id))
+        
+        # Thread-Metadaten aktualisieren
+        cursor.execute("""
+            UPDATE chat_threads 
+            SET updated_at = ?, message_count = message_count + 1
+            WHERE id = ? AND username = ?
+        """, (datetime.now(), thread_id, username))
+        
+        conn.commit()
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error saving message to thread: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def update_thread_title(username: str, thread_id: str, new_title: str) -> bool:
+    """Ändert den Titel eines Threads"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE chat_threads 
+            SET title = ?, updated_at = ?
+            WHERE id = ? AND username = ?
+        """, (new_title, datetime.now(), thread_id, username))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        
+        if success:
+            logger.info(f"[THREADING] Thread title updated: {thread_id} -> {new_title}")
+        
+        return success
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error updating thread title: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def archive_thread(username: str, thread_id: str) -> bool:
+    """Archiviert einen Thread (versteckt ihn aus der Hauptliste)"""
+    if thread_id == 'default':
+        return False  # Default-Thread kann nicht archiviert werden
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE chat_threads 
+            SET is_archived = 1, updated_at = ?
+            WHERE id = ? AND username = ?
+        """, (datetime.now(), thread_id, username))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        return success
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error archiving thread: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def delete_thread_completely(username: str, thread_id: str) -> bool:
+    """Löscht einen Thread und alle seine Nachrichten komplett"""
+    if thread_id == 'default':
+        return False  # Default-Thread kann nicht gelöscht werden
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Erst alle Nachrichten löschen
+        cursor.execute("DELETE FROM chat_history WHERE username = ? AND thread_id = ?", 
+                      (username, thread_id))
+        
+        # Dann Thread löschen
+        cursor.execute("DELETE FROM chat_threads WHERE id = ? AND username = ?", 
+                      (thread_id, username))
+        
+        success = cursor.rowcount > 0
+        conn.commit()
+        
+        if success:
+            logger.info(f"[THREADING] Thread deleted completely: {thread_id}")
+        
+        return success
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error deleting thread: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def get_thread_info(username: str, thread_id: str) -> Optional[Dict]:
+    """Holt Informationen zu einem bestimmten Thread"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT id, title, created_at, updated_at, message_count, is_archived
+            FROM chat_threads 
+            WHERE id = ? AND username = ?
+        """, (thread_id, username))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        return {
+            'id': row[0],
+            'title': row[1],
+            'created_at': datetime.fromisoformat(row[2]) if row[2] else datetime.now(),
+            'updated_at': datetime.fromisoformat(row[3]) if row[3] else datetime.now(),
+            'message_count': row[4] or 0,
+            'is_archived': bool(row[5])
+        }
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error getting thread info: {e}")
+        return None
+    finally:
+        conn.close()
+
+# ──────────────────────────────
+# Auto-Title Generation
+# ──────────────────────────────
+
+def generate_thread_title_from_first_message(first_message: str) -> str:
+    """Generiert automatisch einen Titel basierend auf der ersten Nachricht"""
+    # Erste 50 Zeichen nehmen und bei Wortgrenze abschneiden
+    if len(first_message) <= 50:
+        return first_message
+    
+    truncated = first_message[:47]
+    last_space = truncated.rfind(' ')
+    
+    if last_space > 20:  # Mindestens 20 Zeichen
+        return truncated[:last_space] + "..."
+    else:
+        return truncated + "..."
+
+def update_thread_title_from_first_message(username: str, thread_id: str):
+    """Aktualisiert Thread-Titel basierend auf erster User-Nachricht"""
+    history = get_thread_history(username, thread_id)
+    
+    # Erste User-Nachricht finden
+    first_user_message = None
+    for msg in history:
+        if msg['role'] == 'user':
+            first_user_message = msg['content']
+            break
+    
+    if first_user_message:
+        new_title = generate_thread_title_from_first_message(first_user_message)
+        update_thread_title(username, thread_id, new_title)
+
+# ──────────────────────────────
+# Threading Helper Functions
+# ──────────────────────────────
+
+@cache_result("user_threads", ttl=300)
+def get_user_threads_cached(username: str):
+    """Cached Version von get_user_threads"""
+    return get_user_threads(username)
+
+def invalidate_thread_cache(username: str):
+    """Thread-bezogene Cache-Einträge löschen"""
+    app_cache.delete(f"user_threads:{username}")
+
+# Session-Helper für aktuellen Thread
+def get_current_thread_id(request) -> str:
+    """Holt die aktuelle Thread-ID aus der Session"""
+    return request.session.get("current_thread_id", "default")
+
+def set_current_thread_id(request, thread_id: str):
+    """Setzt die aktuelle Thread-ID in der Session"""
+    request.session["current_thread_id"] = thread_id
+    update_session_activity(request)
+
 class TaskStatus(Enum):
     PENDING = "pending"
     RUNNING = "running"
@@ -1468,26 +1810,54 @@ async def logout(request: Request):
 # ──────────────────────────────
 # Routes - Chat
 # ──────────────────────────────
+# ──────────────────────────────
+# Updated Chat Routes mit Threading-Support
+# ──────────────────────────────
+
 @app.get("/chat", response_class=HTMLResponse)
-async def chat_page(request: Request):
-    # Session-Check
+async def chat_page_with_threading(request: Request):
+    """Chat-Seite mit Threading-Support"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
     username = request.session.get("username")
-    history = get_user_history(username)
     
-    return templates.TemplateResponse("chat.html", {
-        "request": request, 
+    # Aktuellen Thread aus URL oder Session holen
+    thread_id = request.query_params.get('thread', get_current_thread_id(request))
+    set_current_thread_id(request, thread_id)
+    
+    # Threads des Users holen
+    threads = get_user_threads(username)
+    
+    # Aktuellen Thread validieren
+    thread_exists = any(t['id'] == thread_id for t in threads)
+    if not thread_exists and thread_id != 'default':
+        thread_id = 'default'
+        set_current_thread_id(request, thread_id)
+    
+    # Chat-Verlauf für aktuellen Thread
+    history = get_thread_history(username, thread_id)
+    
+    # Thread-Info
+    current_thread = get_thread_info(username, thread_id) or {
+        'id': 'default',
+        'title': 'Haupt-Unterhaltung',
+        'message_count': len(history)
+    }
+    
+    return templates.TemplateResponse("chat_with_threads.html", {
+        "request": request,
         "username": username,
         "chat_history": history,
+        "threads": threads,
+        "current_thread": current_thread,
         "session_timeout_minutes": SESSION_TIMEOUT_MINUTES
     })
 
 @app.post("/chat")
-async def chat_with_enhanced_limits(req: Request):
-    """Chat mit erweiterten Rate-Limits basierend auf Subscription"""
+async def chat_with_threading(req: Request):
+    """Chat-Endpoint mit Threading-Support"""
     redirect = require_active_session(req)
     if redirect:
         return {"reply": "Session abgelaufen. Bitte neu anmelden.", "redirect": "/"}
@@ -1510,38 +1880,61 @@ async def chat_with_enhanced_limits(req: Request):
     
     data = await req.json()
     user_message = data.get("message", "")
+    thread_id = data.get("thread_id", get_current_thread_id(req))
     
     if not user_message.strip():
         return {"reply": "Leere Nachricht."}
+    
+    # Thread validieren/erstellen
+    if not get_thread_info(username, thread_id):
+        if thread_id == 'default':
+            # Default-Thread erstellen falls nicht vorhanden
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO chat_threads (id, username, title)
+                VALUES ('default', ?, 'Haupt-Unterhaltung')
+            """, (username,))
+            conn.commit()
+            conn.close()
+        else:
+            # Thread existiert nicht - Fallback zu default
+            thread_id = 'default'
     
     # Persona-Verfügbarkeit prüfen
     current_persona = get_user_persona_cached(username)
     available_personas = get_available_personas_for_user_cached(username)
     
     if current_persona not in available_personas:
-        # Fallback zu Standard-Persona
         current_persona = "standard"
         save_user_persona_cached(username, current_persona)
     
-    # User-Nachricht speichern
-    save_user_history(username, "user", user_message)
+    # User-Nachricht in Thread speichern
+    save_message_to_thread(username, thread_id, "user", user_message)
     
     # Chat-Historie für Kontext laden
-    history = get_user_history(username)
+    history = get_thread_history(username, thread_id)
     
     try:
-        # Raw-Antwort von KI holen
+        # KI-Antwort mit Thread-Kontext
         raw_response = get_response_with_context(user_message, history, current_persona)
-        
-        # Markdown rendern
         rendered_response = render_markdown_simple(raw_response)
         
-        # Raw-Version in DB speichern (für Verlauf)
-        save_user_history(username, "assistant", raw_response)
+        # KI-Antwort in Thread speichern
+        save_message_to_thread(username, thread_id, "assistant", raw_response)
+        
+        # Auto-Titel für neue Threads (nach erster Nachricht)
+        thread_info = get_thread_info(username, thread_id)
+        if thread_info and thread_info['message_count'] <= 2 and thread_id != 'default':
+            update_thread_title_from_first_message(username, thread_id)
+        
+        # Thread-Cache invalidieren
+        invalidate_thread_cache(username)
         
         return {
             "reply": rendered_response,
             "raw_reply": raw_response,
+            "thread_id": thread_id,
             "remaining_messages": {
                 "hour": rate_limit_result["remaining_hour"],
                 "day": rate_limit_result["remaining_day"]
@@ -1549,23 +1942,211 @@ async def chat_with_enhanced_limits(req: Request):
         }
         
     except Exception as e:
-        logger.error(f"Chat error for {username}: {str(e)}")
+        logger.error(f"Chat error for {username} in thread {thread_id}: {str(e)}")
         return {"reply": "Ein Fehler ist aufgetreten. Versuche es erneut."}
 
-@app.post("/chat/clear-history")
-async def clear_user_history(request: Request):
-    """User kann seinen eigenen Chat-Verlauf löschen"""
+# ──────────────────────────────
+# Thread Management Routes
+# ──────────────────────────────
+
+@app.post("/threads/new")
+async def create_thread(request: Request, title: str = Form(None)):
+    """Erstellt einen neuen Thread"""
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
     username = request.session.get("username")
     
-    # Chat-Verlauf für den User löschen
-    delete_user_history(username)
-    logger.info(f"[USER] {username} hat seinen Chat-Verlauf gelöscht")
+    try:
+        thread_id = create_new_thread(username, title)
+        set_current_thread_id(request, thread_id)
+        invalidate_thread_cache(username)
+        
+        logger.info(f"[THREADING] User {username} created new thread: {thread_id}")
+        return RedirectResponse(f"/chat?thread={thread_id}", status_code=302)
+        
+    except Exception as e:
+        logger.error(f"[THREADING] Error creating thread for {username}: {e}")
+        return RedirectResponse("/chat?error=thread_creation_failed", status_code=302)
+
+@app.post("/threads/{thread_id}/rename")
+async def rename_thread(request: Request, thread_id: str, new_title: str = Form(...)):
+    """Benennt einen Thread um"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
     
-    return RedirectResponse("/chat", status_code=302)
+    username = request.session.get("username")
+    
+    if update_thread_title(username, thread_id, new_title):
+        invalidate_thread_cache(username)
+        return {"success": True, "message": "Thread umbenannt"}
+    else:
+        return {"success": False, "message": "Thread konnte nicht umbenannt werden"}
+
+@app.post("/threads/{thread_id}/archive")
+async def archive_thread_route(request: Request, thread_id: str):
+    """Archiviert einen Thread"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    if archive_thread(username, thread_id):
+        invalidate_thread_cache(username)
+        
+        # Wenn aktueller Thread archiviert wird, zu default wechseln
+        if get_current_thread_id(request) == thread_id:
+            set_current_thread_id(request, 'default')
+        
+        return {"success": True, "message": "Thread archiviert"}
+    else:
+        return {"success": False, "message": "Thread konnte nicht archiviert werden"}
+
+@app.post("/threads/{thread_id}/delete")
+async def delete_thread_route(request: Request, thread_id: str):
+    """Löscht einen Thread komplett"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    if delete_thread_completely(username, thread_id):
+        invalidate_thread_cache(username)
+        
+        # Wenn aktueller Thread gelöscht wird, zu default wechseln
+        if get_current_thread_id(request) == thread_id:
+            set_current_thread_id(request, 'default')
+        
+        return {"success": True, "message": "Thread gelöscht"}
+    else:
+        return {"success": False, "message": "Thread konnte nicht gelöscht werden"}
+
+@app.get("/api/threads")
+async def api_get_threads(request: Request):
+    """API-Endpoint für Thread-Liste (AJAX)"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    username = request.session.get("username")
+    threads = get_user_threads(username)
+    
+    return {
+        "threads": [
+            {
+                "id": t['id'],
+                "title": t['title'],
+                "message_count": t['message_count'],
+                "is_archived": t['is_archived'],
+                "last_message_preview": t.get('last_message', '')[:50] + "..." if len(t.get('last_message', '')) > 50 else t.get('last_message', ''),
+                "updated_at": t['updated_at'].isoformat() if t['updated_at'] else None
+            }
+            for t in threads
+        ],
+        "current_thread": get_current_thread_id(request)
+    }
+
+@app.get("/api/threads/{thread_id}/history")
+async def api_get_thread_history(request: Request, thread_id: str):
+    """API-Endpoint für Thread-Historie (AJAX)"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    username = request.session.get("username")
+    
+    # Berechtigung prüfen
+    thread_info = get_thread_info(username, thread_id)
+    if not thread_info and thread_id != 'default':
+        return {"error": "Thread not found"}
+    
+    history = get_thread_history(username, thread_id)
+    
+    return {
+        "thread_id": thread_id,
+        "thread_info": thread_info,
+        "history": [
+            {
+                "role": msg['role'],
+                "content": render_markdown_simple(msg['content']),
+                "raw_content": msg['content'],
+                "timestamp": msg['timestamp']
+            }
+            for msg in history
+        ]
+    }
+
+# ──────────────────────────────
+# Legacy Route Compatibility
+# ──────────────────────────────
+
+@app.post("/chat/clear-history")
+async def clear_thread_history(request: Request, thread_id: str = Form(None)):
+    """Löscht Thread-Verlauf (kompatibel mit alter Route)"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    current_thread = thread_id or get_current_thread_id(request)
+    
+    # Thread-Nachrichten löschen
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_history WHERE username = ? AND thread_id = ?", 
+                  (username, current_thread))
+    
+    # Thread-Nachrichten-Counter zurücksetzen
+    cursor.execute("UPDATE chat_threads SET message_count = 0, updated_at = ? WHERE id = ? AND username = ?",
+                  (datetime.now(), current_thread, username))
+    
+    conn.commit()
+    conn.close()
+    
+    invalidate_thread_cache(username)
+    logger.info(f"[THREADING] Thread history cleared: {current_thread} for {username}")
+    
+    return RedirectResponse(f"/chat?thread={current_thread}", status_code=302)
+
+# ──────────────────────────────
+# Admin Thread Management
+# ──────────────────────────────
+
+@app.get("/admin/threads/{username}")
+async def admin_view_user_threads(request: Request, username: str):
+    """Admin kann User-Threads einsehen"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    threads = get_user_threads(username)
+    
+    return templates.TemplateResponse("admin_threads.html", {
+        "request": request,
+        "target_username": username,
+        "threads": threads
+    })
+
+@app.post("/admin/threads/{username}/{thread_id}/delete")
+async def admin_delete_thread(request: Request, username: str, thread_id: str):
+    """Admin kann User-Threads löschen"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if delete_thread_completely(username, thread_id):
+        logger.info(f"[ADMIN] Thread deleted by admin: {thread_id} from {username}")
+        return {"success": True, "message": "Thread gelöscht"}
+    else:
+        return {"success": False, "message": "Thread konnte nicht gelöscht werden"}
 
 # ──────────────────────────────
 # Routes - Persona
@@ -2253,8 +2834,9 @@ async def cache_cleanup_background():
 # ──────────────────────────────
 # Startup
 # ──────────────────────────────
-@app.on_event("startup")
+@app.on_event("startup")  
 async def startup():
     init_db()
-    setup_background_tasks()  # Background-Task-System initialisieren
-    logger.info("[STARTUP] KI-Chat mit erweiterten Background-Tasks gestartet")
+    upgrade_database_for_threading()  # NEU: Threading-Support
+    setup_background_tasks()
+    logger.info("[STARTUP] KI-Chat mit Threading und Background-Tasks gestartet"))

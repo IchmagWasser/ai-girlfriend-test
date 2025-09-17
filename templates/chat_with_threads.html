@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KI-Chat mit Threads</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+        }
+
+        /* Sidebar für Threads */
+        .threads-sidebar {
+            width: 300px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-right: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .sidebar-header h2 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+
+        .new-thread-btn {
+            width: 100%;
+            padding: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .new-thread-btn:hover {
+            background: #5a6fd8;
+            transform: translateY(-1px);
+        }
+
+        .threads-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .thread-item {
+            padding: 12px;
+            margin-bottom: 8px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 1px solid transparent;
+            position: relative;
+        }
+
+        .thread-item:hover {
+            background: rgba(102, 126, 234, 0.1);
+            border-color: rgba(102, 126, 234, 0.3);
+        }
+
+        .thread-item.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .thread-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+            font-size: 0.9em;
+        }
+
+        .thread-meta {
+            font-size: 0.75em;
+            opacity: 0.7;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .thread-actions {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .thread-item:hover .thread-actions {
+            opacity: 1;
+        }
+
+        .thread-action-btn {
+            background: none;
+            border: none;
+            color: inherit;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-size: 0.8em;
+        }
+
+        .thread-action-btn:hover {
+            background: rgba(0, 0, 0, 0.1);
+        }
+
+        /* Chat-Bereich */
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .chat-header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chat-header h1 {
+            color: #667eea;
+            font-size: 1.5em;
+            margin: 0;
+        }
+
+        .thread-info {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.9em;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5a6fd8;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+
+        .message.user {
+            background: #667eea;
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 6px;
+        }
+
+        .message.assistant {
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            align-self: flex-start;
+            border-bottom-left-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .message-time {
+            font-size: 0.75em;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        .chat-input-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .chat-input {
+            flex: 1;
+            min-height: 50px;
+            max-height: 120px;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 16px;
+            resize: none;
+            outline: none;
+            font-family: inherit;
+            transition: border-color 0.3s ease;
+        }
+
+        .chat-input:focus {
+            border-color: #667eea;
+        }
+
+        .send-btn {
+            width: 50px;
+            height: 50px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .send-btn:hover {
+            background: #5a6fd8;
+            transform: scale(1.05);
+        }
+
+        .send-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Modals */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            margin-bottom: 20px;
+        }
+
+        .modal-header h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .form-control:focus {
+            border-color: #667eea;
+            outline: none;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+
+        /* Status Anzeigen */
+        .typing-indicator {
+            display: none;
+            align-self: flex-start;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 18px;
+            color: #666;
+            font-style: italic;
+        }
+
+        .typing-indicator.active {
+            display: block;
+        }
+
+        .rate-limit-warning {
+            background: #fff3cd;
+            color: #856404;
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ffeaa7;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: rgba(255, 255, 255, 0.8);
+            margin-top: 50px;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 10px;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            body {
+                flex-direction: column;
+            }
+
+            .threads-sidebar {
+                width: 100%;
+                height: auto;
+                max-height: 200px;
+                order: 2;
+            }
+
+            .chat-container {
+                height: calc(100vh - 200px);
+                order: 1;
+            }
+
+            .threads-list {
+                display: flex;
+                overflow-x: auto;
+                overflow-y: hidden;
+                padding: 10px;
+            }
+
+            .thread-item {
+                min-width: 200px;
+                margin-right: 10px;
+                margin-bottom: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Threads Sidebar -->
+    <div class="threads-sidebar">
+        <div class="sidebar-header">
+            <h2>Chat-Threads</h2>
+            <button class="new-thread-btn" onclick="createNewThread()">
+                ➕ Neuer Thread
+            </button>
+        </div>
+        
+        <div class="threads-list" id="threads-list">
+            {% for thread in threads %}
+            <div class="thread-item {% if thread.id == current_thread.id %}active{% endif %}" 
+                 onclick="switchThread('{{ thread.id }}')" data-thread-id="{{ thread.id }}">
+                <div class="thread-title">{{ thread.title }}</div>
+                <div class="thread-meta">
+                    <span>{{ thread.message_count }} Nachrichten</span>
+                    {% if thread.id != 'default' %}
+                    <div class="thread-actions">
+                        <button class="thread-action-btn" onclick="event.stopPropagation(); editThread('{{ thread.id }}', '{{ thread.title }}')" title="Umbenennen">✏️</button>
+                        <button class="thread-action-btn" onclick="event.stopPropagation(); deleteThread('{{ thread.id }}')" title="Löschen">🗑️</button>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Chat Container -->
+    <div class="chat-container">
+        <!-- Chat Header -->
+        <div class="chat-header">
+            <div>
+                <h1>{{ current_thread.title }}</h1>
+                <div class="thread-info">
+                    {{ current_thread.message_count }} Nachrichten • Thread: {{ current_thread.id }}
+                </div>
+            </div>
+            <div class="header-actions">
+                <a href="/persona" class="btn btn-secondary">🎭 Persona</a>
+                <button onclick="clearThreadHistory()" class="btn btn-danger">🗑️ Verlauf löschen</button>
+                <a href="/logout" class="btn btn-secondary">🚪 Logout</a>
+            </div>
+        </div>
+
+        <!-- Chat Messages -->
+        <div class="chat-messages" id="chat-messages">
+            {% if chat_history %}
+                {% for message in chat_history %}
+                <div class="message {{ message.role }}">
+                    {{ message.content|safe }}
+                    <div class="message-time">
+                        {{ message.timestamp.split('T')[1].split('.')[0] if '.' in message.timestamp else message.timestamp.split('T')[1] }}
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+            <div class="empty-state">
+                <h3>Willkommen im neuen Thread!</h3>
+                <p>Starte eine Unterhaltung mit der KI.</p>
+            </div>
+            {% endif %}
+            
+            <div class="typing-indicator" id="typing-indicator">
+                KI tippt...
+            </div>
+        </div>
+
+        <!-- Chat Input -->
+        <div class="chat-input-container">
+            <div class="input-group">
+                <textarea 
+                    id="chat-input" 
+                    class="chat-input" 
+                    placeholder="Schreibe deine Nachricht..."
+                    rows="1"></textarea>
+                <button id="send-btn" class="send-btn" onclick="sendMessage()">
+                    ➤
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="new-thread-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Neuer Thread</h3>
+                <p>Erstelle einen neuen Chat-Thread</p>
+            </div>
+            <form id="new-thread-form" method="post" action="/threads/new">
+                <div class="form-group">
+                    <label for="thread-title">Titel (optional):</label>
+                    <input type="text" id="thread-title" name="title" class="form-control" 
+                           placeholder="Wird automatisch generiert...">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" onclick="closeModal('new-thread-modal')" class="btn btn-secondary">Abbrechen</button>
+                    <button type="submit" class="btn btn-primary">Erstellen</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="edit-thread-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Thread umbenennen</h3>
+            </div>
+            <form id="edit-thread-form">
+                <div class="form-group">
+                    <label for="edit-thread-title">Neuer Titel:</label>
+                    <input type="text" id="edit-thread-title" class="form-control" required>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" onclick="closeModal('edit-thread-modal')" class="btn btn-secondary">Abbrechen</button>
+                    <button type="submit" class="btn btn-primary">Speichern</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        let currentThreadId = '{{ current_thread.id }}';
+        let isTyping = false;
+
+        // Auto-resize textarea
+        const chatInput = document.getElementById('chat-input');
+        chatInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+
+        // Enter to send (Shift+Enter for new line)
+        chatInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Send message function
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+            
+            if (!message || isTyping) return;
+
+            input.value = '';
+            input.style.height = 'auto';
+            
+            // Show user message immediately
+            addMessageToChat('user', message);
+            
+            // Show typing indicator
+            showTypingIndicator();
+            
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        message: message,
+                        thread_id: currentThreadId 
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.redirect) {
+                    window.location.href = data.redirect;
+                    return;
+                }
+                
+                if (data.rate_limit) {
+                    showRateLimitWarning(data.reply);
+                } else {
+                    addMessageToChat('assistant', data.reply);
+                    updateThreadsList(); // Refresh thread list
+                }
+                
+            } catch (error) {
+                addMessageToChat('assistant', 'Ein Fehler ist aufgetreten. Bitte versuche es erneut.');
+            } finally {
+                hideTypingIndicator();
+            }
+        }
+
+        function addMessageToChat(role, content) {
+            const messagesContainer = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            
+            const now = new Date();
+            const time = now.toLocaleTimeString('de-DE', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit' 
+            });
+            
+            messageDiv.innerHTML = `
+                ${content}
+                <div class="message-time">${time}</div>
+            `;
+            
+            // Remove empty state if present
+            const emptyState = messagesContainer.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function showTypingIndicator() {
+            isTyping = true;
+            document.getElementById('typing-indicator').classList.add('active');
+            document.getElementById('send-btn').disabled = true;
+            
+            const messagesContainer = document.getElementById('chat-messages');
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function hideTypingIndicator() {
+            isTyping = false;
+            document.getElementById('typing-indicator').classList.remove('active');
+            document.getElementById('send-btn').disabled = false;
+        }
+
+        function showRateLimitWarning(message) {
+            const warningDiv = document.createElement('div');
+            warningDiv.className = 'rate-limit-warning';
+            warningDiv.textContent = message;
+            
+            const inputContainer = document.querySelector('.chat-input-container');
+            inputContainer.insertBefore(warningDiv, inputContainer.firstChild);
+            
+            setTimeout(() => warningDiv.remove(), 10000);
+        }
+
+        // Thread management functions
+        function createNewThread() {
+            document.getElementById('new-thread-modal').classList.add('active');
+        }
+
+        function switchThread(threadId) {
+            if (threadId === currentThreadId) return;
+            
+            window.location.href = `/chat?thread=${threadId}`;
+        }
+
+        function editThread(threadId, currentTitle) {
+            document.getElementById('edit-thread-title').value = currentTitle;
+            document.getElementById('edit-thread-modal').classList.add('active');
+            
+            document.getElementById('edit-thread-form').onsubmit = async function(e) {
+                e.preventDefault();
+                const newTitle = document.getElementById('edit-thread-title').value;
+                
+                try {
+                    const response = await fetch(`/threads/${threadId}/rename`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: `new_title=${encodeURIComponent(newTitle)}`
+                    });
+                    
+                    const result = await response.json();
+                    if (result.success) {
+                        location.reload(); // Reload to update thread list
+                    } else {
+                        alert(result.message);
+                    }
+                } catch (error) {
+                    alert('Fehler beim Umbenennen des Threads');
+                }
+                
+                closeModal('edit-thread-modal');
+            };
+        }
+
+        function deleteThread(threadId) {
+            if (!confirm('Thread wirklich löschen? Alle Nachrichten gehen verloren!')) return;
+            
+            fetch(`/threads/${threadId}/delete`, { method: 'POST' })
+                .then(response => response.json())
+                .then(result => {
+                    if (result.success) {
+                        if (threadId === currentThreadId) {
+                            window.location.href = '/chat'; // Go to default thread
+                        } else {
+                            location.reload(); // Refresh to update thread list
+                        }
+                    } else {
+                        alert(result.message);
+                    }
+                });
+        }
+
+        function clearThreadHistory() {
+            if (!confirm('Chat-Verlauf für diesen Thread wirklich löschen?')) return;
+            
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/chat/clear-history';
+            
+            const threadInput = document.createElement('input');
+            threadInput.type = 'hidden';
+            threadInput.name = 'thread_id';
+            threadInput.value = currentThreadId;
+            form.appendChild(threadInput);
+            
+            document.body.appendChild(form);
+            form.submit();
+        }
+
+        function updateThreadsList() {
+            // Refresh thread list via AJAX (optional enhancement)
+            // This keeps the thread list current without full page reload
+        }
+
+        // Modal functions
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('active');
+        }
+
+        // Close modals when clicking outside
+        document.querySelectorAll('.modal').forEach(modal => {
+            modal.addEventListener('click', function(e) {
+                if (e.target === this) {
+                    this.classList.remove('active');
+                }
+            });
+        });
+
+        // Auto-scroll to bottom on page load
+        window.addEventListener('load', function() {
+            const messagesContainer = document.getElementById('chat-messages');
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        });
+    </script>
+</body>
+</html>
