@@ -357,24 +357,7 @@ def update_thread_title_from_first_message(username: str, thread_id: str):
 # Threading Helper Functions
 # ──────────────────────────────
 
-@cache_result("user_threads", ttl=300)
-def get_user_threads_cached(username: str):
-    """Cached Version von get_user_threads"""
-    return get_user_threads(username)
 
-def invalidate_thread_cache(username: str):
-    """Thread-bezogene Cache-Einträge löschen"""
-    app_cache.delete(f"user_threads:{username}")
-
-# Session-Helper für aktuellen Thread
-def get_current_thread_id(request) -> str:
-    """Holt die aktuelle Thread-ID aus der Session"""
-    return request.session.get("current_thread_id", "default")
-
-def set_current_thread_id(request, thread_id: str):
-    """Setzt die aktuelle Thread-ID in der Session"""
-    request.session["current_thread_id"] = thread_id
-    update_session_activity(request)
 
 class TaskStatus(Enum):
     PENDING = "pending"
@@ -983,7 +966,28 @@ def invalidate_user_cache(username: str):
     
     for key in keys_to_delete:
         app_cache.delete(key)
+# ──────────────────────────────
+# Threading Helper Functions (HIER HINZUFÜGEN)
+# ──────────────────────────────
 
+@cache_result("user_threads", ttl=300)
+def get_user_threads_cached(username: str):
+    """Cached Version von get_user_threads"""
+    return get_user_threads(username)
+
+def invalidate_thread_cache(username: str):
+    """Thread-bezogene Cache-Einträge löschen"""
+    app_cache.delete(f"user_threads:{username}")
+
+# Session-Helper für aktuellen Thread
+def get_current_thread_id(request) -> str:
+    """Holt die aktuelle Thread-ID aus der Session"""
+    return request.session.get("current_thread_id", "default")
+
+def set_current_thread_id(request, thread_id: str):
+    """Setzt die aktuelle Thread-ID in der Session"""
+    request.session["current_thread_id"] = thread_id
+    update_session_activity(request)
 # ──────────────────────────────
 # Subscription Tiers Definition
 # ──────────────────────────────
