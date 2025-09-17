@@ -2843,4 +2843,4 @@ async def startup():
     init_db()
     upgrade_database_for_threading()  # NEU: Threading-Support
     setup_background_tasks()
-    logger.info("[STARTUP] KI-Chat mit Threading und Background-Tasks gestartet"))
+    logger.info("[STARTUP] KI-Chat mit Threading und Background-Tasks gestartet")
