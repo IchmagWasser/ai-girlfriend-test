@@ -470,11 +470,19 @@
             </div>
             <div class="header-actions">
                 <a href="/persona" class="btn btn-secondary">🎭 Persona</a>
+                  {% if request.session.get("username") == "admin" %}
+                <a href="/admin" class="btn btn-primary">👑 Admin</a>
+                 {% endif %}
                 <button onclick="clearThreadHistory()" class="btn btn-danger">🗑️ Verlauf löschen</button>
                 <a href="/logout" class="btn btn-secondary">🚪 Logout</a>
+                <a href="/search">🔍 Suche</a>
             </div>
         </div>
-
+            <div class="quick-search-container" style="padding: 10px 20px; border-bottom: 1px solid rgba(255,255,255,0.2); background: rgba(255, 255, 255, 0.95);">
+              <input type="text" id="quickSearchInput" placeholder="Schnellsuche in diesem Thread..." 
+           style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
+            <div id="quickSearchResults" style="position: absolute; background: white; border: 1px solid #ddd; border-radius: 6px; max-height: 200px; overflow-y: auto; z-index: 1000; display: none; width: calc(100% - 40px); margin-top: 5px;"></div>
+       </div>
         <!-- Chat Messages -->
         <div class="chat-messages" id="chat-messages">
             {% if chat_history %}
@@ -769,6 +777,73 @@
         window.addEventListener('load', function() {
             const messagesContainer = document.getElementById('chat-messages');
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        });
+    </script>
+ <script>
+        // Quick Search Funktionalität
+        let quickSearchTimeout;
+
+        document.getElementById('quickSearchInput').addEventListener('input', function(e) {
+            const query = e.target.value.trim();
+            
+            clearTimeout(quickSearchTimeout);
+            quickSearchTimeout = setTimeout(() => {
+                if (query.length >= 2) {
+                    performQuickSearch(query);
+                } else {
+                    document.getElementById('quickSearchResults').style.display = 'none';
+                }
+            }, 300);
+        });
+
+        async function performQuickSearch(query) {
+            try {
+                const response = await fetch(`/api/chat/quick-search?q=${encodeURIComponent(query)}&thread=${currentThreadId}`);
+                const data = await response.json();
+                
+                const resultsContainer = document.getElementById('quickSearchResults');
+                
+                if (data.results && data.results.length > 0) {
+                    resultsContainer.innerHTML = data.results.map(result => `
+                        <div style="padding: 10px; border-bottom: 1px solid #f0f0f0; cursor: pointer;" onclick="highlightInChat('${result.content}')">
+                            <div style="font-weight: 500; color: ${result.role === 'user' ? '#667eea' : '#28a745'};">
+                                ${result.role === 'user' ? 'Du' : 'KI'}
+                            </div>
+                            <div style="font-size: 0.9em; color: #666; margin-top: 5px;">
+                                ${result.content.substring(0, 100)}...
+                            </div>
+                        </div>
+                    `).join('');
+                    resultsContainer.style.display = 'block';
+                } else {
+                    resultsContainer.innerHTML = '<div style="padding: 10px; color: #666; text-align: center;">Keine Ergebnisse gefunden</div>';
+                    resultsContainer.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Quick search error:', error);
+            }
+        }
+
+        function highlightInChat(searchContent) {
+            document.getElementById('quickSearchResults').style.display = 'none';
+            
+            const messages = document.querySelectorAll('.message');
+            messages.forEach(msg => {
+                if (msg.textContent.includes(searchContent.substring(0, 50))) {
+                    msg.style.backgroundColor = '#fff3cd';
+                    msg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    
+                    setTimeout(() => {
+                        msg.style.backgroundColor = '';
+                    }, 3000);
+                }
+            });
+        }
+
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.quick-search-container')) {
+                document.getElementById('quickSearchResults').style.display = 'none';
+            }
         });
     </script>
 </body>
