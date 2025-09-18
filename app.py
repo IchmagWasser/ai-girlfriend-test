@@ -320,534 +320,6 @@ def get_thread_info(username: str, thread_id: str) -> Optional[Dict]:
     finally:
         conn.close()
 
-
-# ──────────────────────────────
-# Search Functions
-# ──────────────────────────────
-
-def search_chat_messages(username: str, query: str, thread_id: str = None, 
-                        days_back: int = None, limit: int = 50) -> List[Dict]:
-    """
-    Durchsucht Chat-Nachrichten eines Users
-    
-    Args:
-        username: Der User
-        query: Suchbegriff
-        thread_id: Optionaler Thread-Filter (None = alle Threads)
-        days_back: Optionaler Zeitfilter (None = alle Zeit)
-        limit: Max. Anzahl Ergebnisse
-    
-    Returns:
-        Liste von Suchergebnissen mit Kontext
-    """
-    if not query.strip():
-        return []
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # Base Query
-        sql = """
-            SELECT h.id, h.role, h.content, h.timestamp, h.thread_id,
-                   t.title as thread_title
-            FROM chat_history h
-            LEFT JOIN chat_threads t ON h.thread_id = t.id AND h.username = t.username
-            WHERE h.username = ? AND h.content LIKE ?
-        """
-        params = [username, f"%{query}%"]
-        
-        # Thread-Filter
-        if thread_id:
-            sql += " AND h.thread_id = ?"
-            params.append(thread_id)
-        
-        # Zeit-Filter
-        if days_back:
-            cutoff_date = datetime.now() - timedelta(days=days_back)
-            sql += " AND h.timestamp >= ?"
-            params.append(cutoff_date.isoformat())
-        
-        sql += " ORDER BY h.timestamp DESC LIMIT ?"
-        params.append(limit)
-        
-        cursor.execute(sql, params)
-        rows = cursor.fetchall()
-        
-        results = []
-        for row in rows:
-            # Kontext holen (vorherige und nächste Nachricht)
-            context = get_message_context(username, row[0], row[4])  # message_id, thread_id
-            
-            results.append({
-                'id': row[0],
-                'role': row[1],
-                'content': row[2],
-                'timestamp': row[3],
-                'thread_id': row[4],
-                'thread_title': row[5] or 'Unbekannter Thread',
-                'highlighted_content': highlight_search_term(row[2], query),
-                'context': context
-            })
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"[SEARCH] Error searching messages for {username}: {e}")
-        return []
-    finally:
-        conn.close()
-
-def get_message_context(username: str, message_id: int, thread_id: str, 
-                       context_size: int = 2) -> Dict:
-    """
-    Holt Kontext um eine bestimmte Nachricht
-    
-    Args:
-        username: Der User
-        message_id: ID der Nachricht
-        thread_id: Thread der Nachricht
-        context_size: Anzahl Nachrichten vor/nach der gefundenen
-    
-    Returns:
-        Dict mit before/after Nachrichten
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # Nachrichten vor der gefundenen
-        cursor.execute("""
-            SELECT role, content, timestamp 
-            FROM chat_history 
-            WHERE username = ? AND thread_id = ? AND id < ?
-            ORDER BY timestamp DESC 
-            LIMIT ?
-        """, (username, thread_id, message_id, context_size))
-        
-        before = [{'role': row[0], 'content': row[1], 'timestamp': row[2]} 
-                 for row in reversed(cursor.fetchall())]
-        
-        # Nachrichten nach der gefundenen
-        cursor.execute("""
-            SELECT role, content, timestamp 
-            FROM chat_history 
-            WHERE username = ? AND thread_id = ? AND id > ?
-            ORDER BY timestamp ASC 
-            LIMIT ?
-        """, (username, thread_id, message_id, context_size))
-        
-        after = [{'role': row[0], 'content': row[1], 'timestamp': row[2]} 
-                for row in cursor.fetchall()]
-        
-        return {
-            'before': before,
-            'after': after
-        }
-        
-    except Exception as e:
-        logger.error(f"[SEARCH] Error getting context for message {message_id}: {e}")
-        return {'before': [], 'after': []}
-    finally:
-        conn.close()
-
-def highlight_search_term(text: str, search_term: str, max_length: int = 200) -> str:
-    """
-    Hebt Suchbegriff im Text hervor und kürzt bei Bedarf
-    
-    Args:
-        text: Ursprungstext
-        search_term: Zu suchender Begriff
-        max_length: Max. Länge des Ergebnisses
-    
-    Returns:
-        Text mit hervorgehobenen Suchbegriffen
-    """
-    if not search_term.strip():
-        return text[:max_length] + "..." if len(text) > max_length else text
-    
-    # Case-insensitive highlight
-    pattern = re.compile(re.escape(search_term), re.IGNORECASE)
-    
-    # Finde erste Übereinstimmung
-    match = pattern.search(text)
-    if not match:
-        return text[:max_length] + "..." if len(text) > max_length else text
-    
-    # Extrahiere Snippet um die Übereinstimmung
-    start = match.start()
-    snippet_start = max(0, start - max_length // 2)
-    snippet_end = min(len(text), snippet_start + max_length)
-    
-    snippet = text[snippet_start:snippet_end]
-    
-    # Hinzufügen von "..." wenn gekürzt
-    if snippet_start > 0:
-        snippet = "..." + snippet
-    if snippet_end < len(text):
-        snippet = snippet + "..."
-    
-    # Highlight hinzufügen
-    highlighted = pattern.sub(
-        r'<mark class="search-highlight">\g<0></mark>', 
-        snippet
-    )
-    
-    return highlighted
-
-def get_search_suggestions(username: str, partial_query: str, limit: int = 10) -> List[str]:
-    """
-    Schlägt Suchbegriffe basierend auf häufigen Wörtern vor
-    
-    Args:
-        username: Der User
-        partial_query: Teilweise eingegebene Suche
-        limit: Max. Anzahl Vorschläge
-    
-    Returns:
-        Liste von Suchvorschlägen
-    """
-    if len(partial_query) < 2:
-        return []
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # Finde häufige Wörter die mit der Eingabe beginnen
-        cursor.execute("""
-            SELECT content FROM chat_history 
-            WHERE username = ? AND content LIKE ?
-            ORDER BY timestamp DESC 
-            LIMIT 100
-        """, (username, f"%{partial_query}%"))
-        
-        rows = cursor.fetchall()
-        word_counts = {}
-        
-        # Extrahiere Wörter aus den Nachrichten
-        for row in rows:
-            content = row[0].lower()
-            # Einfache Tokenisierung
-            words = re.findall(r'\b\w+\b', content)
-            
-            for word in words:
-                if (word.startswith(partial_query.lower()) and 
-                    len(word) > len(partial_query) and
-                    len(word) >= 3):  # Mindestlänge
-                    word_counts[word] = word_counts.get(word, 0) + 1
-        
-        # Sortiere nach Häufigkeit
-        suggestions = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
-        return [word for word, count in suggestions[:limit]]
-        
-    except Exception as e:
-        logger.error(f"[SEARCH] Error getting suggestions for {username}: {e}")
-        return []
-    finally:
-        conn.close()
-
-def get_search_statistics(username: str) -> Dict:
-    """
-    Holt Suchstatistiken für einen User
-    
-    Args:
-        username: Der User
-    
-    Returns:
-        Dict mit Statistiken
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # Gesamtanzahl Nachrichten
-        cursor.execute("""
-            SELECT COUNT(*) FROM chat_history WHERE username = ?
-        """, (username,))
-        total_messages = cursor.fetchone()[0]
-        
-        # Nachrichten nach Thread
-        cursor.execute("""
-            SELECT t.title, COUNT(h.id) as count
-            FROM chat_history h
-            LEFT JOIN chat_threads t ON h.thread_id = t.id AND h.username = t.username
-            WHERE h.username = ?
-            GROUP BY h.thread_id, t.title
-            ORDER BY count DESC
-        """, (username,))
-        thread_stats = cursor.fetchall()
-        
-        # Nachrichten nach Datum (letzte 30 Tage)
-        cursor.execute("""
-            SELECT DATE(timestamp) as date, COUNT(*) as count
-            FROM chat_history 
-            WHERE username = ? AND timestamp >= datetime('now', '-30 days')
-            GROUP BY DATE(timestamp)
-            ORDER BY date DESC
-        """, (username,))
-        daily_stats = cursor.fetchall()
-        
-        # Rolle-Verteilung
-        cursor.execute("""
-            SELECT role, COUNT(*) as count
-            FROM chat_history 
-            WHERE username = ?
-            GROUP BY role
-        """, (username,))
-        role_stats = cursor.fetchall()
-        
-        return {
-            'total_messages': total_messages,
-            'threads': [
-                {'name': row[0] or 'Unbekannter Thread', 'count': row[1]} 
-                for row in thread_stats
-            ],
-            'daily_activity': [
-                {'date': row[0], 'count': row[1]} 
-                for row in daily_stats
-            ],
-            'message_types': [
-                {'role': row[0], 'count': row[1]} 
-                for row in role_stats
-            ]
-        }
-        
-    except Exception as e:
-        logger.error(f"[SEARCH] Error getting statistics for {username}: {e}")
-        return {
-            'total_messages': 0,
-            'threads': [],
-            'daily_activity': [],
-            'message_types': []
-        }
-    finally:
-        conn.close()
-
-# ──────────────────────────────
-# Advanced Search Functions
-# ──────────────────────────────
-
-def advanced_search(username: str, query: str, filters: Dict) -> List[Dict]:
-    """
-    Erweiterte Suche mit verschiedenen Filtern
-    
-    Args:
-        username: Der User
-        query: Suchbegriff
-        filters: Dict mit Filtern (role, thread_id, date_from, date_to)
-    
-    Returns:
-        Liste von Suchergebnissen
-    """
-    if not query.strip():
-        return []
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        sql = """
-            SELECT h.id, h.role, h.content, h.timestamp, h.thread_id,
-                   t.title as thread_title
-            FROM chat_history h
-            LEFT JOIN chat_threads t ON h.thread_id = t.id AND h.username = t.username
-            WHERE h.username = ?
-        """
-        params = [username]
-        
-        # Suchbegriff-Filter
-        if '*' in query or '?' in query:
-            # Wildcard-Suche
-            search_pattern = query.replace('*', '%').replace('?', '_')
-            sql += " AND h.content LIKE ?"
-            params.append(search_pattern)
-        elif '"' in query:
-            # Exakte Phrase
-            exact_phrase = query.strip('"')
-            sql += " AND h.content LIKE ?"
-            params.append(f"%{exact_phrase}%")
-        else:
-            # Standard-Suche (alle Wörter müssen vorkommen)
-            words = query.split()
-            for word in words:
-                sql += " AND h.content LIKE ?"
-                params.append(f"%{word}%")
-        
-        # Rollen-Filter
-        if filters.get('role'):
-            sql += " AND h.role = ?"
-            params.append(filters['role'])
-        
-        # Thread-Filter
-        if filters.get('thread_id'):
-            sql += " AND h.thread_id = ?"
-            params.append(filters['thread_id'])
-        
-        # Datumsbereich
-        if filters.get('date_from'):
-            sql += " AND h.timestamp >= ?"
-            params.append(filters['date_from'])
-        
-        if filters.get('date_to'):
-            sql += " AND h.timestamp <= ?"
-            params.append(filters['date_to'])
-        
-        sql += " ORDER BY h.timestamp DESC LIMIT ?"
-        params.append(filters.get('limit', 50))
-        
-        cursor.execute(sql, params)
-        rows = cursor.fetchall()
-        
-        results = []
-        for row in rows:
-            context = get_message_context(username, row[0], row[4])
-            
-            results.append({
-                'id': row[0],
-                'role': row[1],
-                'content': row[2],
-                'timestamp': row[3],
-                'thread_id': row[4],
-                'thread_title': row[5] or 'Unbekannter Thread',
-                'highlighted_content': highlight_search_term(row[2], query.strip('"')),
-                'context': context
-            })
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"[SEARCH] Error in advanced search for {username}: {e}")
-        return []
-    finally:
-        conn.close()
-
-def export_search_results(username: str, results: List[Dict]) -> str:
-    """
-    Exportiert Suchergebnisse als CSV-String
-    
-    Args:
-        username: Der User
-        results: Suchergebnisse
-    
-    Returns:
-        CSV-String
-    """
-    output = io.StringIO()
-    writer = csv.writer(output)
-    
-    # Header
-    writer.writerow([
-        'Timestamp', 'Thread', 'Role', 'Content', 'Thread_ID'
-    ])
-    
-    # Daten
-    for result in results:
-        writer.writerow([
-            result['timestamp'],
-            result['thread_title'],
-            result['role'],
-            result['content'][:500],  # Begrenzte Länge
-            result['thread_id']
-        ])
-    
-    output.seek(0)
-    return output.getvalue()
-
-# ──────────────────────────────
-# Cached Search Functions
-# ──────────────────────────────
-
-@cache_result("search_stats", ttl=600)
-def get_search_statistics_cached(username: str):
-    """Cached Version von get_search_statistics"""
-    return get_search_statistics(username)
-
-def invalidate_search_cache(username: str):
-    """Such-bezogene Cache-Einträge löschen"""
-    app_cache.delete(f"search_stats:{username}")
-
-# ──────────────────────────────
-# Search Helper Functions
-# ──────────────────────────────
-
-def parse_search_query(query: str) -> Dict:
-    """
-    Parst erweiterte Suchsyntax
-    
-    Args:
-        query: Roh-Suchquery
-    
-    Returns:
-        Dict mit geparseten Elementen
-    """
-    parsed = {
-        'terms': [],
-        'exact_phrases': [],
-        'exclude_terms': [],
-        'role_filter': None,
-        'thread_filter': None
-    }
-    
-    # Entferne spezielle Befehle
-    parts = query.split()
-    current_terms = []
-    
-    for part in parts:
-        if part.startswith('role:'):
-            parsed['role_filter'] = part[5:]
-        elif part.startswith('thread:'):
-            parsed['thread_filter'] = part[7:]
-        elif part.startswith('-'):
-            parsed['exclude_terms'].append(part[1:])
-        elif '"' in part:
-            # Sammle Phrase bis zum schließenden Anführungszeichen
-            if part.count('"') == 2:
-                parsed['exact_phrases'].append(part.strip('"'))
-            else:
-                current_terms.append(part)
-        else:
-            current_terms.append(part)
-    
-    parsed['terms'] = current_terms
-    return parsed
-
-def format_search_result_snippet(content: str, query: str, max_length: int = 150) -> str:
-    """
-    Formatiert Suchergebnis-Snippet mit Kontext
-    
-    Args:
-        content: Vollständiger Inhalt
-        query: Suchbegriff
-        max_length: Maximale Snippet-Länge
-    
-    Returns:
-        Formatiertes Snippet
-    """
-    if not query or len(content) <= max_length:
-        return highlight_search_term(content, query, max_length)
-    
-    # Finde beste Position für Snippet
-    query_lower = query.lower()
-    content_lower = content.lower()
-    
-    pos = content_lower.find(query_lower)
-    if pos == -1:
-        return content[:max_length] + "..."
-    
-    # Zentriere um Suchbegriff
-    start = max(0, pos - max_length // 2)
-    end = min(len(content), start + max_length)
-    
-    snippet = content[start:end]
-    
-    if start > 0:
-        snippet = "..." + snippet
-    if end < len(content):
-        snippet = snippet + "..."
-    
-    return highlight_search_term(snippet, query)
-
 # ──────────────────────────────
 # Auto-Title Generation
 # ──────────────────────────────
@@ -1358,6 +830,7 @@ def setup_background_tasks():
         run_immediately=False
     )
     
+    setup_search_background_tasks()
     logger.info("[TASKS] Background-Task-System initialisiert")
 
 # Alte cache_cleanup_background Funktion ersetzen
@@ -1964,6 +1437,529 @@ def save_user_persona_cached(username: str, persona: str):
     """save_user_persona mit Cache-Invalidierung"""
     save_user_persona(username, persona)
     invalidate_user_cache(username)
+
+def search_chat_messages(username: str, query: str, thread_id: str = None, 
+                        days_back: int = None, limit: int = 50) -> List[Dict]:
+    """
+    Durchsucht Chat-Nachrichten eines Users
+    
+    Args:
+        username: Der User
+        query: Suchbegriff
+        thread_id: Optionaler Thread-Filter (None = alle Threads)
+        days_back: Optionaler Zeitfilter (None = alle Zeit)
+        limit: Max. Anzahl Ergebnisse
+    
+    Returns:
+        Liste von Suchergebnissen mit Kontext
+    """
+    if not query.strip():
+        return []
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Base Query
+        sql = """
+            SELECT h.id, h.role, h.content, h.timestamp, h.thread_id,
+                   t.title as thread_title
+            FROM chat_history h
+            LEFT JOIN chat_threads t ON h.thread_id = t.id AND h.username = t.username
+            WHERE h.username = ? AND h.content LIKE ?
+        """
+        params = [username, f"%{query}%"]
+        
+        # Thread-Filter
+        if thread_id:
+            sql += " AND h.thread_id = ?"
+            params.append(thread_id)
+        
+        # Zeit-Filter
+        if days_back:
+            cutoff_date = datetime.now() - timedelta(days=days_back)
+            sql += " AND h.timestamp >= ?"
+            params.append(cutoff_date.isoformat())
+        
+        sql += " ORDER BY h.timestamp DESC LIMIT ?"
+        params.append(limit)
+        
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        
+        results = []
+        for row in rows:
+            # Kontext holen (vorherige und nächste Nachricht)
+            context = get_message_context(username, row[0], row[4])  # message_id, thread_id
+            
+            results.append({
+                'id': row[0],
+                'role': row[1],
+                'content': row[2],
+                'timestamp': row[3],
+                'thread_id': row[4],
+                'thread_title': row[5] or 'Unbekannter Thread',
+                'highlighted_content': highlight_search_term(row[2], query),
+                'context': context
+            })
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"[SEARCH] Error searching messages for {username}: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_message_context(username: str, message_id: int, thread_id: str, 
+                       context_size: int = 2) -> Dict:
+    """
+    Holt Kontext um eine bestimmte Nachricht
+    
+    Args:
+        username: Der User
+        message_id: ID der Nachricht
+        thread_id: Thread der Nachricht
+        context_size: Anzahl Nachrichten vor/nach der gefundenen
+    
+    Returns:
+        Dict mit before/after Nachrichten
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Nachrichten vor der gefundenen
+        cursor.execute("""
+            SELECT role, content, timestamp 
+            FROM chat_history 
+            WHERE username = ? AND thread_id = ? AND id < ?
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        """, (username, thread_id, message_id, context_size))
+        
+        before = [{'role': row[0], 'content': row[1], 'timestamp': row[2]} 
+                 for row in reversed(cursor.fetchall())]
+        
+        # Nachrichten nach der gefundenen
+        cursor.execute("""
+            SELECT role, content, timestamp 
+            FROM chat_history 
+            WHERE username = ? AND thread_id = ? AND id > ?
+            ORDER BY timestamp ASC 
+            LIMIT ?
+        """, (username, thread_id, message_id, context_size))
+        
+        after = [{'role': row[0], 'content': row[1], 'timestamp': row[2]} 
+                for row in cursor.fetchall()]
+        
+        return {
+            'before': before,
+            'after': after
+        }
+        
+    except Exception as e:
+        logger.error(f"[SEARCH] Error getting context for message {message_id}: {e}")
+        return {'before': [], 'after': []}
+    finally:
+        conn.close()
+
+def highlight_search_term(text: str, search_term: str, max_length: int = 200) -> str:
+    """
+    Hebt Suchbegriff im Text hervor und kürzt bei Bedarf
+    
+    Args:
+        text: Ursprungstext
+        search_term: Zu suchender Begriff
+        max_length: Max. Länge des Ergebnisses
+    
+    Returns:
+        Text mit hervorgehobenen Suchbegriffen
+    """
+    if not search_term.strip():
+        return text[:max_length] + "..." if len(text) > max_length else text
+    
+    # Case-insensitive highlight
+    pattern = re.compile(re.escape(search_term), re.IGNORECASE)
+    
+    # Finde erste Übereinstimmung
+    match = pattern.search(text)
+    if not match:
+        return text[:max_length] + "..." if len(text) > max_length else text
+    
+    # Extrahiere Snippet um die Übereinstimmung
+    start = match.start()
+    snippet_start = max(0, start - max_length // 2)
+    snippet_end = min(len(text), snippet_start + max_length)
+    
+    snippet = text[snippet_start:snippet_end]
+    
+    # Hinzufügen von "..." wenn gekürzt
+    if snippet_start > 0:
+        snippet = "..." + snippet
+    if snippet_end < len(text):
+        snippet = snippet + "..."
+    
+    # Highlight hinzufügen
+    highlighted = pattern.sub(
+        r'<mark class="search-highlight">\g<0></mark>', 
+        snippet
+    )
+    
+    return highlighted
+
+def get_search_suggestions(username: str, partial_query: str, limit: int = 10) -> List[str]:
+    """
+    Schlägt Suchbegriffe basierend auf häufigen Wörtern vor
+    
+    Args:
+        username: Der User
+        partial_query: Teilweise eingegebene Suche
+        limit: Max. Anzahl Vorschläge
+    
+    Returns:
+        Liste von Suchvorschlägen
+    """
+    if len(partial_query) < 2:
+        return []
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Finde häufige Wörter die mit der Eingabe beginnen
+        cursor.execute("""
+            SELECT content FROM chat_history 
+            WHERE username = ? AND content LIKE ?
+            ORDER BY timestamp DESC 
+            LIMIT 100
+        """, (username, f"%{partial_query}%"))
+        
+        rows = cursor.fetchall()
+        word_counts = {}
+        
+        # Extrahiere Wörter aus den Nachrichten
+        for row in rows:
+            content = row[0].lower()
+            # Einfache Tokenisierung
+            words = re.findall(r'\b\w+\b', content)
+            
+            for word in words:
+                if (word.startswith(partial_query.lower()) and 
+                    len(word) > len(partial_query) and
+                    len(word) >= 3):  # Mindestlänge
+                    word_counts[word] = word_counts.get(word, 0) + 1
+        
+        # Sortiere nach Häufigkeit
+        suggestions = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)
+        return [word for word, count in suggestions[:limit]]
+        
+    except Exception as e:
+        logger.error(f"[SEARCH] Error getting suggestions for {username}: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_search_statistics(username: str) -> Dict:
+    """
+    Holt Suchstatistiken für einen User
+    
+    Args:
+        username: Der User
+    
+    Returns:
+        Dict mit Statistiken
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Gesamtanzahl Nachrichten
+        cursor.execute("""
+            SELECT COUNT(*) FROM chat_history WHERE username = ?
+        """, (username,))
+        total_messages = cursor.fetchone()[0]
+        
+        # Nachrichten nach Thread
+        cursor.execute("""
+            SELECT t.title, COUNT(h.id) as count
+            FROM chat_history h
+            LEFT JOIN chat_threads t ON h.thread_id = t.id AND h.username = t.username
+            WHERE h.username = ?
+            GROUP BY h.thread_id, t.title
+            ORDER BY count DESC
+        """, (username,))
+        thread_stats = cursor.fetchall()
+        
+        # Nachrichten nach Datum (letzte 30 Tage)
+        cursor.execute("""
+            SELECT DATE(timestamp) as date, COUNT(*) as count
+            FROM chat_history 
+            WHERE username = ? AND timestamp >= datetime('now', '-30 days')
+            GROUP BY DATE(timestamp)
+            ORDER BY date DESC
+        """, (username,))
+        daily_stats = cursor.fetchall()
+        
+        # Rolle-Verteilung
+        cursor.execute("""
+            SELECT role, COUNT(*) as count
+            FROM chat_history 
+            WHERE username = ?
+            GROUP BY role
+        """, (username,))
+        role_stats = cursor.fetchall()
+        
+        return {
+            'total_messages': total_messages,
+            'threads': [
+                {'name': row[0] or 'Unbekannter Thread', 'count': row[1]} 
+                for row in thread_stats
+            ],
+            'daily_activity': [
+                {'date': row[0], 'count': row[1]} 
+                for row in daily_stats
+            ],
+            'message_types': [
+                {'role': row[0], 'count': row[1]} 
+                for row in role_stats
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"[SEARCH] Error getting statistics for {username}: {e}")
+        return {
+            'total_messages': 0,
+            'threads': [],
+            'daily_activity': [],
+            'message_types': []
+        }
+    finally:
+        conn.close()
+
+# ──────────────────────────────
+# Advanced Search Functions
+# ──────────────────────────────
+
+def advanced_search(username: str, query: str, filters: Dict) -> List[Dict]:
+    """
+    Erweiterte Suche mit verschiedenen Filtern
+    
+    Args:
+        username: Der User
+        query: Suchbegriff
+        filters: Dict mit Filtern (role, thread_id, date_from, date_to)
+    
+    Returns:
+        Liste von Suchergebnissen
+    """
+    if not query.strip():
+        return []
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        sql = """
+            SELECT h.id, h.role, h.content, h.timestamp, h.thread_id,
+                   t.title as thread_title
+            FROM chat_history h
+            LEFT JOIN chat_threads t ON h.thread_id = t.id AND h.username = t.username
+            WHERE h.username = ?
+        """
+        params = [username]
+        
+        # Suchbegriff-Filter
+        if '*' in query or '?' in query:
+            # Wildcard-Suche
+            search_pattern = query.replace('*', '%').replace('?', '_')
+            sql += " AND h.content LIKE ?"
+            params.append(search_pattern)
+        elif '"' in query:
+            # Exakte Phrase
+            exact_phrase = query.strip('"')
+            sql += " AND h.content LIKE ?"
+            params.append(f"%{exact_phrase}%")
+        else:
+            # Standard-Suche (alle Wörter müssen vorkommen)
+            words = query.split()
+            for word in words:
+                sql += " AND h.content LIKE ?"
+                params.append(f"%{word}%")
+        
+        # Rollen-Filter
+        if filters.get('role'):
+            sql += " AND h.role = ?"
+            params.append(filters['role'])
+        
+        # Thread-Filter
+        if filters.get('thread_id'):
+            sql += " AND h.thread_id = ?"
+            params.append(filters['thread_id'])
+        
+        # Datumsbereich
+        if filters.get('date_from'):
+            sql += " AND h.timestamp >= ?"
+            params.append(filters['date_from'])
+        
+        if filters.get('date_to'):
+            sql += " AND h.timestamp <= ?"
+            params.append(filters['date_to'])
+        
+        sql += " ORDER BY h.timestamp DESC LIMIT ?"
+        params.append(filters.get('limit', 50))
+        
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        
+        results = []
+        for row in rows:
+            context = get_message_context(username, row[0], row[4])
+            
+            results.append({
+                'id': row[0],
+                'role': row[1],
+                'content': row[2],
+                'timestamp': row[3],
+                'thread_id': row[4],
+                'thread_title': row[5] or 'Unbekannter Thread',
+                'highlighted_content': highlight_search_term(row[2], query.strip('"')),
+                'context': context
+            })
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"[SEARCH] Error in advanced search for {username}: {e}")
+        return []
+    finally:
+        conn.close()
+
+def export_search_results(username: str, results: List[Dict]) -> str:
+    """
+    Exportiert Suchergebnisse als CSV-String
+    
+    Args:
+        username: Der User
+        results: Suchergebnisse
+    
+    Returns:
+        CSV-String
+    """
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        'Timestamp', 'Thread', 'Role', 'Content', 'Thread_ID'
+    ])
+    
+    # Daten
+    for result in results:
+        writer.writerow([
+            result['timestamp'],
+            result['thread_title'],
+            result['role'],
+            result['content'][:500],  # Begrenzte Länge
+            result['thread_id']
+        ])
+    
+    output.seek(0)
+    return output.getvalue()
+
+# ──────────────────────────────
+# Cached Search Functions
+# ──────────────────────────────
+
+@cache_result("search_stats", ttl=600)
+def get_search_statistics_cached(username: str):
+    """Cached Version von get_search_statistics"""
+    return get_search_statistics(username)
+
+def invalidate_search_cache(username: str):
+    """Such-bezogene Cache-Einträge löschen"""
+    app_cache.delete(f"search_stats:{username}")
+
+# ──────────────────────────────
+# Search Helper Functions
+# ──────────────────────────────
+
+def parse_search_query(query: str) -> Dict:
+    """
+    Parst erweiterte Suchsyntax
+    
+    Args:
+        query: Roh-Suchquery
+    
+    Returns:
+        Dict mit geparseten Elementen
+    """
+    parsed = {
+        'terms': [],
+        'exact_phrases': [],
+        'exclude_terms': [],
+        'role_filter': None,
+        'thread_filter': None
+    }
+    
+    # Entferne spezielle Befehle
+    parts = query.split()
+    current_terms = []
+    
+    for part in parts:
+        if part.startswith('role:'):
+            parsed['role_filter'] = part[5:]
+        elif part.startswith('thread:'):
+            parsed['thread_filter'] = part[7:]
+        elif part.startswith('-'):
+            parsed['exclude_terms'].append(part[1:])
+        elif '"' in part:
+            # Sammle Phrase bis zum schließenden Anführungszeichen
+            if part.count('"') == 2:
+                parsed['exact_phrases'].append(part.strip('"'))
+            else:
+                current_terms.append(part)
+        else:
+            current_terms.append(part)
+    
+    parsed['terms'] = current_terms
+    return parsed
+
+def format_search_result_snippet(content: str, query: str, max_length: int = 150) -> str:
+    """
+    Formatiert Suchergebnis-Snippet mit Kontext
+    
+    Args:
+        content: Vollständiger Inhalt
+        query: Suchbegriff
+        max_length: Maximale Snippet-Länge
+    
+    Returns:
+        Formatiertes Snippet
+    """
+    if not query or len(content) <= max_length:
+        return highlight_search_term(content, query, max_length)
+    
+    # Finde beste Position für Snippet
+    query_lower = query.lower()
+    content_lower = content.lower()
+    
+    pos = content_lower.find(query_lower)
+    if pos == -1:
+        return content[:max_length] + "..."
+    
+    # Zentriere um Suchbegriff
+    start = max(0, pos - max_length // 2)
+    end = min(len(content), start + max_length)
+    
+    snippet = content[start:end]
+    
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(content):
+        snippet = snippet + "..."
+    
+    return highlight_search_term(snippet, query)
 
 def set_user_subscription_tier_cached(username: str, tier: str):
     """set_user_subscription_tier mit Cache-Invalidierung"""
