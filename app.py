@@ -16,7 +16,7 @@ import hmac
 import json
 import re
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Dict, List
 from collections import defaultdict, deque
@@ -26,13 +26,15 @@ import threading
 from functools import wraps, lru_cache
 
 from ollama_chat import get_response, get_response_with_messages
-import asyncio
 from typing import Dict, List, Callable, Any, Optional, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from enum import Enum
 import traceback
 import uuid
+
+import openai
+import httpx
+from abc import ABC, abstractmethod
 
 def upgrade_database_for_threading():
     """Erweitert die Datenbank um Threading-Support"""
@@ -989,6 +991,234 @@ def set_current_thread_id(request, thread_id: str):
     """Setzt die aktuelle Thread-ID in der Session"""
     request.session["current_thread_id"] = thread_id
     update_session_activity(request)
+
+# ──────────────────────────────
+# Database Extensions für Multi-AI Models
+# ──────────────────────────────
+
+def upgrade_database_for_models():
+    """Erweitert die Datenbank um Multi-Model-Support"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # User-Model-Preference hinzufügen
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'preferred_model' not in columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN preferred_model TEXT DEFAULT 'nexus'")
+            logger.info("[MODELS] Added preferred_model column to users")
+        
+        # Chat-History um Model-Info erweitern
+        cursor.execute("PRAGMA table_info(chat_history)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'model_used' not in columns:
+            cursor.execute("ALTER TABLE chat_history ADD COLUMN model_used TEXT DEFAULT 'nexus'")
+            cursor.execute("ALTER TABLE chat_history ADD COLUMN tokens_used INTEGER DEFAULT 0")
+            cursor.execute("ALTER TABLE chat_history ADD COLUMN response_time REAL DEFAULT 0.0")
+            cursor.execute("ALTER TABLE chat_history ADD COLUMN cost REAL DEFAULT 0.0")
+            logger.info("[MODELS] Added model tracking columns to chat_history")
+        
+        # Thread-Model-Preference
+        cursor.execute("PRAGMA table_info(chat_threads)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'preferred_model' not in columns:
+            cursor.execute("ALTER TABLE chat_threads ADD COLUMN preferred_model TEXT DEFAULT NULL")
+            logger.info("[MODELS] Added preferred_model column to chat_threads")
+        
+        conn.commit()
+        logger.info("[MODELS] Database upgraded for multi-model support")
+        
+    except Exception as e:
+        logger.error(f"[MODELS] Database upgrade error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+# ──────────────────────────────
+# Model Preference Management
+# ──────────────────────────────
+
+def get_user_preferred_model(username: str) -> str:
+    """Holt bevorzugtes Model des Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT preferred_model FROM users WHERE username = ?", (username,))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else "nexus"
+    except sqlite3.OperationalError:
+        # Spalte existiert noch nicht
+        return "nexus"
+    finally:
+        conn.close()
+
+def set_user_preferred_model(username: str, model_id: str):
+    """Setzt bevorzugtes Model für User"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("UPDATE users SET preferred_model = ? WHERE username = ?", 
+                      (model_id, username))
+        conn.commit()
+        logger.info(f"[MODELS] User {username} preferred model set to {model_id}")
+    except Exception as e:
+        logger.error(f"[MODELS] Error setting preferred model: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+def get_thread_preferred_model(username: str, thread_id: str) -> Optional[str]:
+    """Holt Thread-spezifisches Model"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT preferred_model FROM chat_threads 
+            WHERE id = ? AND username = ?
+        """, (thread_id, username))
+        result = cursor.fetchone()
+        return result[0] if result and result[0] else None
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+
+def set_thread_preferred_model(username: str, thread_id: str, model_id: str):
+    """Setzt Thread-spezifisches Model"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            UPDATE chat_threads SET preferred_model = ? 
+            WHERE id = ? AND username = ?
+        """, (model_id, thread_id, username))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"[MODELS] Error setting thread model: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+# ──────────────────────────────
+# Enhanced Chat Function mit Multi-Model-Support
+# ──────────────────────────────
+
+def save_message_to_thread_with_model(username: str, thread_id: str, role: str, 
+                                     content: str, model_info: Dict = None):
+    """Erweiterte Version mit Model-Tracking"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT INTO chat_history 
+            (username, role, content, thread_id, model_used, tokens_used, response_time, cost) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            username, role, content, thread_id,
+            model_info.get('model_used', 'nexus') if model_info else 'nexus',
+            model_info.get('tokens_used', 0) if model_info else 0,
+            model_info.get('duration', 0.0) if model_info else 0.0,
+            model_info.get('cost', 0.0) if model_info else 0.0
+        ))
+        
+        # Thread-Metadaten aktualisieren
+        cursor.execute("""
+            UPDATE chat_threads 
+            SET updated_at = ?, message_count = message_count + 1
+            WHERE id = ? AND username = ?
+        """, (datetime.now(), thread_id, username))
+        
+        conn.commit()
+        
+    except sqlite3.OperationalError:
+        # Fallback für alte DB-Schema
+        cursor.execute("""
+            INSERT INTO chat_history (username, role, content, thread_id) 
+            VALUES (?, ?, ?, ?)
+        """, (username, role, content, thread_id))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"[MODELS] Error saving message with model info: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def get_model_context_for_thread(username: str, thread_id: str) -> str:
+    """Bestimmt welches Model für Thread verwendet werden soll"""
+    # 1. Thread-spezifisches Model
+    thread_model = get_thread_preferred_model(username, thread_id)
+    if thread_model:
+        return thread_model
+    
+    # 2. User-bevorzugtes Model
+    user_model = get_user_preferred_model(username)
+    if user_model:
+        return user_model
+    
+    # 3. Default
+    return "nexus"
+
+async def get_ai_response_with_model(current_message: str, chat_history: list, 
+                                   username: str, thread_id: str, persona: str = "standard",
+                                   model_override: str = None) -> Dict:
+    """
+    Erweiterte KI-Response-Funktion mit Multi-Model-Support
+    """
+    # Model bestimmen
+    model_to_use = model_override or get_model_context_for_thread(username, thread_id)
+    
+    # Nachrichten für Model formatieren
+    messages = []
+    
+    # System-Prompt basierend auf Persona UND Model
+    persona_config = PERSONAS.get(persona, PERSONAS["standard"])
+    model_config = AI_MODELS.get(model_to_use, AI_MODELS["nexus"])
+    
+    # Kombinierter System-Prompt
+    system_prompt = f"{persona_config['system_prompt']}\n\nDu bist {model_config.display_name}: {model_config.personality}"
+    
+    messages.append({
+        "role": "system",
+        "content": system_prompt
+    })
+    
+    # Chat-Historie hinzufügen
+    for msg in chat_history[-20:]:  # Letzte 20 Nachrichten
+        if msg["role"] in ["user", "assistant"]:
+            messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+    
+    # Aktuelle Nachricht
+    messages.append({
+        "role": "user",
+        "content": current_message
+    })
+    
+    # Response vom Model-Manager holen
+    try:
+        result = await model_manager.generate_response(
+            model_id=model_to_use,
+            messages=messages,
+            username=username,
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        
+
 # ──────────────────────────────
 # Subscription Tiers Definition
 # ──────────────────────────────
@@ -2055,6 +2285,515 @@ def save_user_persona(username: str, persona: str):
     conn.close()
 
 # ──────────────────────────────
+# AI Model Definitions mit kreativen Namen
+# ──────────────────────────────
+
+class ModelProvider(Enum):
+    OLLAMA = "ollama"
+    OPENAI = "openai"
+
+@dataclass
+class AIModel:
+    """Definition eines KI-Modells mit kreativem Namen"""
+    id: str                    # Technische ID
+    display_name: str          # Kreativer Anzeigename
+    provider: ModelProvider    # Anbieter (Ollama/OpenAI)
+    model_name: str           # Echter Model-Name bei API
+    description: str          # Beschreibung
+    max_tokens: int           # Token-Limit
+    cost_per_1k_tokens: float # Kosten (falls relevant)
+    capabilities: List[str]    # Fähigkeiten
+    subscription_tier: str     # Mindest-Tier
+    is_active: bool           # Verfügbar?
+    personality: str          # Persönlichkeitsbeschreibung
+
+# Verfügbare KI-Modelle mit kreativen Namen
+AI_MODELS = {
+    # Ollama-basierte Modelle (lokal/kostenlos)
+    "nexus": AIModel(
+        id="nexus",
+        display_name="Nexus",
+        provider=ModelProvider.OLLAMA,
+        model_name="llama2:7b",
+        description="Ein zuverlässiger Allround-Assistent mit ausgeglichener Persönlichkeit",
+        max_tokens=4096,
+        cost_per_1k_tokens=0.0,
+        capabilities=["general_chat", "coding", "analysis"],
+        subscription_tier="free",
+        is_active=True,
+        personality="Ausgewogen, hilfsbereit, logisch denkend"
+    ),
+    
+    "aurora": AIModel(
+        id="aurora",
+        display_name="Aurora",
+        provider=ModelProvider.OLLAMA,
+        model_name="llama2:13b",
+        description="Eine kreative und intuitive KI für komplexe Aufgaben",
+        max_tokens=4096,
+        cost_per_1k_tokens=0.0,
+        capabilities=["creative_writing", "brainstorming", "complex_reasoning"],
+        subscription_tier="pro",
+        is_active=True,
+        personality="Kreativ, einfühlsam, visionär"
+    ),
+    
+    "cipher": AIModel(
+        id="cipher",
+        display_name="Cipher",
+        provider=ModelProvider.OLLAMA,
+        model_name="codellama:13b",
+        description="Spezialist für Programmierung und technische Analysen",
+        max_tokens=4096,
+        cost_per_1k_tokens=0.0,
+        capabilities=["coding", "debugging", "technical_analysis", "architecture"],
+        subscription_tier="pro",
+        is_active=True,
+        personality="Präzise, methodisch, technisch versiert"
+    ),
+    
+    # OpenAI-basierte Modelle (kostenpflichtig)
+    "phoenix": AIModel(
+        id="phoenix",
+        display_name="Phoenix",
+        provider=ModelProvider.OPENAI,
+        model_name="gpt-3.5-turbo",
+        description="Schneller und effizienter Conversational AI",
+        max_tokens=4096,
+        cost_per_1k_tokens=0.002,
+        capabilities=["general_chat", "quick_responses", "multi_language"],
+        subscription_tier="pro",
+        is_active=True,
+        personality="Schnell, direkt, vielseitig"
+    ),
+    
+    "prometheus": AIModel(
+        id="prometheus",
+        display_name="Prometheus",
+        provider=ModelProvider.OPENAI,
+        model_name="gpt-4",
+        description="Hochintelligente KI für komplexeste Aufgaben und tiefe Analysen",
+        max_tokens=8192,
+        cost_per_1k_tokens=0.03,
+        capabilities=["advanced_reasoning", "research", "complex_analysis", "creative_writing"],
+        subscription_tier="premium",
+        is_active=True,
+        personality="Tiefgreifend, analytisch, weise"
+    ),
+    
+    "atlas": AIModel(
+        id="atlas",
+        display_name="Atlas",
+        provider=ModelProvider.OPENAI,
+        model_name="gpt-4-turbo",
+        description="Kraftvolle KI mit erweiterten Fähigkeiten für anspruchsvolle Tasks",
+        max_tokens=128000,
+        cost_per_1k_tokens=0.01,
+        capabilities=["long_context", "document_analysis", "research", "multi_modal"],
+        subscription_tier="premium",
+        is_active=True,
+        personality="Kraftvoll, gründlich, umfassend"
+    )
+}
+
+# ──────────────────────────────
+# Abstract AI Provider Interface
+# ──────────────────────────────
+
+class AIProvider(ABC):
+    """Abstrakte Basis-Klasse für KI-Anbieter"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.is_available = False
+        
+    @abstractmethod
+    async def test_connection(self) -> bool:
+        """Testet Verbindung zum Anbieter"""
+        pass
+    
+    @abstractmethod
+    async def generate_response(self, messages: List[Dict], model: AIModel, **kwargs) -> Dict:
+        """Generiert Antwort vom Model"""
+        pass
+    
+    @abstractmethod
+    def get_available_models(self) -> List[str]:
+        """Listet verfügbare Modelle auf"""
+        pass
+
+# ──────────────────────────────
+# Ollama Provider Implementation
+# ──────────────────────────────
+
+class OllamaProvider(AIProvider):
+    """Ollama-Anbieter für lokale Modelle"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.base_url = config.get('base_url', 'http://localhost:11434')
+        self.timeout = config.get('timeout', 120)
+        
+    async def test_connection(self) -> bool:
+        """Testet Ollama-Verbindung"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+                self.is_available = response.status_code == 200
+                return self.is_available
+        except Exception as e:
+            logger.error(f"[OLLAMA] Connection test failed: {e}")
+            self.is_available = False
+            return False
+    
+    async def generate_response(self, messages: List[Dict], model: AIModel, **kwargs) -> Dict:
+        """Generiert Antwort über Ollama"""
+        start_time = time.time()
+        
+        try:
+            # Format für Ollama API
+            prompt = self._format_messages_for_ollama(messages)
+            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                payload = {
+                    "model": model.model_name,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": kwargs.get('temperature', 0.7),
+                        "top_p": kwargs.get('top_p', 0.9),
+                        "max_tokens": kwargs.get('max_tokens', model.max_tokens)
+                    }
+                }
+                
+                response = await client.post(
+                    f"{self.base_url}/api/generate",
+                    json=payload
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    duration = time.time() - start_time
+                    
+                    return {
+                        'success': True,
+                        'content': data.get('response', ''),
+                        'model_used': model.display_name,
+                        'provider': 'ollama',
+                        'duration': duration,
+                        'tokens_used': len(data.get('response', '').split()) * 1.3,  # Schätzung
+                        'cost': 0.0,  # Ollama ist kostenlos
+                        'metadata': {
+                            'model_name': model.model_name,
+                            'done': data.get('done', False)
+                        }
+                    }
+                else:
+                    return {
+                        'success': False,
+                        'error': f"Ollama API error: {response.status_code}",
+                        'model_used': model.display_name
+                    }
+                    
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'model_used': model.display_name
+            }
+    
+    def _format_messages_for_ollama(self, messages: List[Dict]) -> str:
+        """Konvertiert Chat-Messages zu Ollama-Prompt"""
+        formatted_parts = []
+        
+        for message in messages:
+            role = message.get('role', 'user')
+            content = message.get('content', '')
+            
+            if role == 'system':
+                formatted_parts.append(f"System: {content}")
+            elif role == 'user':
+                formatted_parts.append(f"Human: {content}")
+            elif role == 'assistant':
+                formatted_parts.append(f"Assistant: {content}")
+        
+        # Abschluss für Antwort
+        formatted_parts.append("Assistant:")
+        return "\n\n".join(formatted_parts)
+    
+    def get_available_models(self) -> List[str]:
+        """Holt verfügbare Ollama-Modelle"""
+        try:
+            import requests
+            response = requests.get(f"{self.base_url}/api/tags", timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                return [model['name'] for model in data.get('models', [])]
+        except Exception as e:
+            logger.error(f"[OLLAMA] Error fetching models: {e}")
+        return []
+
+# ──────────────────────────────
+# OpenAI Provider Implementation
+# ──────────────────────────────
+
+class OpenAIProvider(AIProvider):
+    """OpenAI-Anbieter für GPT-Modelle"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.api_key = config.get('api_key', os.getenv('OPENAI_API_KEY'))
+        self.organization = config.get('organization')
+        
+        # OpenAI Client konfigurieren
+        openai.api_key = self.api_key
+        if self.organization:
+            openai.organization = self.organization
+    
+    async def test_connection(self) -> bool:
+        """Testet OpenAI-Verbindung"""
+        try:
+            # Einfacher Test-Request
+            response = await openai.ChatCompletion.acreate(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Test"}],
+                max_tokens=5
+            )
+            self.is_available = True
+            return True
+        except Exception as e:
+            logger.error(f"[OPENAI] Connection test failed: {e}")
+            self.is_available = False
+            return False
+    
+    async def generate_response(self, messages: List[Dict], model: AIModel, **kwargs) -> Dict:
+        """Generiert Antwort über OpenAI API"""
+        start_time = time.time()
+        
+        try:
+            response = await openai.ChatCompletion.acreate(
+                model=model.model_name,
+                messages=messages,
+                max_tokens=kwargs.get('max_tokens', min(model.max_tokens, 2000)),
+                temperature=kwargs.get('temperature', 0.7),
+                top_p=kwargs.get('top_p', 0.9),
+                presence_penalty=kwargs.get('presence_penalty', 0),
+                frequency_penalty=kwargs.get('frequency_penalty', 0)
+            )
+            
+            duration = time.time() - start_time
+            usage = response.usage
+            
+            # Kosten berechnen
+            tokens_used = usage.total_tokens
+            cost = (tokens_used / 1000) * model.cost_per_1k_tokens
+            
+            return {
+                'success': True,
+                'content': response.choices[0].message.content,
+                'model_used': model.display_name,
+                'provider': 'openai',
+                'duration': duration,
+                'tokens_used': tokens_used,
+                'cost': cost,
+                'metadata': {
+                    'model_name': model.model_name,
+                    'prompt_tokens': usage.prompt_tokens,
+                    'completion_tokens': usage.completion_tokens,
+                    'finish_reason': response.choices[0].finish_reason
+                }
+            }
+            
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'model_used': model.display_name
+            }
+    
+    def get_available_models(self) -> List[str]:
+        """Holt verfügbare OpenAI-Modelle"""
+        try:
+            models = openai.Model.list()
+            return [model.id for model in models.data if 'gpt' in model.id]
+        except Exception as e:
+            logger.error(f"[OPENAI] Error fetching models: {e}")
+        return []
+
+# ──────────────────────────────
+# Model Manager
+# ──────────────────────────────
+
+class ModelManager:
+    """Zentraler Manager für alle KI-Modelle"""
+    
+    def __init__(self):
+        self.providers: Dict[ModelProvider, AIProvider] = {}
+        self.models = AI_MODELS
+        self.default_model = "nexus"  # Fallback-Model
+        
+        # Provider initialisieren
+        self._initialize_providers()
+    
+    def _initialize_providers(self):
+        """Initialisiert alle verfügbaren Provider"""
+        # Ollama Provider
+        ollama_config = {
+            'base_url': os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434'),
+            'timeout': 120
+        }
+        self.providers[ModelProvider.OLLAMA] = OllamaProvider(ollama_config)
+        
+        # OpenAI Provider
+        openai_config = {
+            'api_key': os.getenv('OPENAI_API_KEY'),
+            'organization': os.getenv('OPENAI_ORGANIZATION')
+        }
+        self.providers[ModelProvider.OPENAI] = OpenAIProvider(openai_config)
+    
+    async def test_all_providers(self) -> Dict[str, bool]:
+        """Testet alle Provider"""
+        results = {}
+        for provider_name, provider in self.providers.items():
+            results[provider_name.value] = await provider.test_connection()
+        return results
+    
+    def get_available_models_for_user(self, username: str) -> Dict[str, AIModel]:
+        """Holt verfügbare Modelle basierend auf User-Subscription"""
+        user_tier = get_user_subscription_tier_cached(username)
+        
+        available_models = {}
+        for model_id, model in self.models.items():
+            if not model.is_active:
+                continue
+                
+            # Subscription-Check
+            tier_levels = {"free": 1, "pro": 2, "premium": 3}
+            user_level = tier_levels.get(user_tier, 1)
+            model_level = tier_levels.get(model.subscription_tier, 1)
+            
+            if user_level >= model_level:
+                # Provider-Verfügbarkeit prüfen
+                provider = self.providers.get(model.provider)
+                if provider and provider.is_available:
+                    available_models[model_id] = model
+        
+        return available_models
+    
+    async def generate_response(self, model_id: str, messages: List[Dict], 
+                              username: str, **kwargs) -> Dict:
+        """Generiert Antwort mit spezifischem Model"""
+        # Model validieren
+        if model_id not in self.models:
+            model_id = self.default_model
+        
+        model = self.models[model_id]
+        
+        # User-Berechtigung prüfen
+        available_models = self.get_available_models_for_user(username)
+        if model_id not in available_models:
+            model_id = self.default_model
+            model = self.models[model_id]
+        
+        # Provider holen
+        provider = self.providers.get(model.provider)
+        if not provider or not provider.is_available:
+            # Fallback zu anderem Provider
+            fallback_result = await self._try_fallback_models(messages, username, **kwargs)
+            if fallback_result:
+                return fallback_result
+        
+        # Response generieren
+        try:
+            result = await provider.generate_response(messages, model, **kwargs)
+            
+            # Usage tracking
+            if result.get('success'):
+                await self._track_model_usage(username, model_id, result)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"[MODEL] Error with {model.display_name}: {e}")
+            return await self._try_fallback_models(messages, username, **kwargs)
+    
+    async def _try_fallback_models(self, messages: List[Dict], username: str, **kwargs) -> Dict:
+        """Versucht Fallback-Modelle bei Fehlern"""
+        available_models = self.get_available_models_for_user(username)
+        
+        # Prioritätsliste für Fallbacks
+        fallback_priority = ["nexus", "aurora", "phoenix", "cipher"]
+        
+        for model_id in fallback_priority:
+            if model_id in available_models:
+                try:
+                    model = self.models[model_id]
+                    provider = self.providers.get(model.provider)
+                    
+                    if provider and provider.is_available:
+                        result = await provider.generate_response(messages, model, **kwargs)
+                        if result.get('success'):
+                            result['is_fallback'] = True
+                            return result
+                except Exception:
+                    continue
+        
+        # Wenn alle Fallbacks fehlschlagen
+        return {
+            'success': False,
+            'error': 'Alle KI-Modelle sind momentan nicht verfügbar',
+            'model_used': 'none'
+        }
+    
+    async def _track_model_usage(self, username: str, model_id: str, result: Dict):
+        """Trackt Model-Usage für Statistiken"""
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            # Usage-Tabelle erstellen falls nicht vorhanden
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS model_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    tokens_used INTEGER DEFAULT 0,
+                    cost REAL DEFAULT 0.0,
+                    duration REAL DEFAULT 0.0,
+                    success INTEGER DEFAULT 1,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (username) REFERENCES users (username)
+                )
+            """)
+            
+            # Usage-Eintrag hinzufügen
+            cursor.execute("""
+                INSERT INTO model_usage 
+                (username, model_id, model_name, provider, tokens_used, cost, duration, success)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                username,
+                model_id,
+                result.get('model_used', 'unknown'),
+                result.get('provider', 'unknown'),
+                result.get('tokens_used', 0),
+                result.get('cost', 0.0),
+                result.get('duration', 0.0),
+                1 if result.get('success') else 0
+            ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"[MODEL] Usage tracking error: {e}")
+
+# Globaler Model-Manager
+model_manager = ModelManager()
+
+# ──────────────────────────────
 # Enhanced Subscription Functions
 # ──────────────────────────────
 def get_user_subscription_tier(username: str) -> str:
@@ -2383,25 +3122,28 @@ async def chat_page_with_threading(request: Request):
         "session_timeout_minutes": SESSION_TIMEOUT_MINUTES
     })
 
+# ──────────────────────────────
+# Multi-AI Models Routes
+# ──────────────────────────────
+
+# Erweiterte Chat-Route mit Multi-Model-Support
 @app.post("/chat")
-async def chat_with_threading(req: Request):
-    """Chat-Endpoint mit Threading-Support"""
+async def chat_with_multi_models(req: Request):
+    """Erweiterte Chat-Route mit Multi-Model-Support"""
     redirect = require_active_session(req)
     if redirect:
         return {"reply": "Session abgelaufen. Bitte neu anmelden.", "redirect": "/"}
     
     username = req.session.get("username")
     
-    # Erweiterte Rate-Limit-Prüfung
+    # Rate-Limit-Prüfung
     rate_limit_result = check_enhanced_rate_limit(username)
     if not rate_limit_result["allowed"]:
         tier = rate_limit_result.get("tier", "free")
         tier_name = SUBSCRIPTION_TIERS.get(tier, {}).get("name", tier)
         
         return {
-            "reply": f"Rate-Limit erreicht für {tier_name}-Plan! " +
-                    f"Verbleibend heute: {rate_limit_result['remaining_day']}, " +
-                    f"diese Stunde: {rate_limit_result['remaining_hour']}",
+            "reply": f"Rate-Limit erreicht für {tier_name}-Plan!",
             "rate_limit": True,
             "tier": tier
         }
@@ -2409,6 +3151,7 @@ async def chat_with_threading(req: Request):
     data = await req.json()
     user_message = data.get("message", "")
     thread_id = data.get("thread_id", get_current_thread_id(req))
+    model_override = data.get("model_id")  # Optionale Model-Überschreibung
     
     if not user_message.strip():
         return {"reply": "Leere Nachricht."}
@@ -2416,7 +3159,6 @@ async def chat_with_threading(req: Request):
     # Thread validieren/erstellen
     if not get_thread_info(username, thread_id):
         if thread_id == 'default':
-            # Default-Thread erstellen falls nicht vorhanden
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             cursor.execute("""
@@ -2426,10 +3168,9 @@ async def chat_with_threading(req: Request):
             conn.commit()
             conn.close()
         else:
-            # Thread existiert nicht - Fallback zu default
             thread_id = 'default'
     
-    # Persona-Verfügbarkeit prüfen
+    # Persona prüfen
     current_persona = get_user_persona_cached(username)
     available_personas = get_available_personas_for_user_cached(username)
     
@@ -2437,32 +3178,55 @@ async def chat_with_threading(req: Request):
         current_persona = "standard"
         save_user_persona_cached(username, current_persona)
     
-    # User-Nachricht in Thread speichern
+    # User-Nachricht speichern (ohne Model-Info)
     save_message_to_thread(username, thread_id, "user", user_message)
     
-    # Chat-Historie für Kontext laden
+    # Chat-Historie laden
     history = get_thread_history(username, thread_id)
     
     try:
-        # KI-Antwort mit Thread-Kontext
-        raw_response = get_response_with_context(user_message, history, current_persona)
+        # AI-Response mit Multi-Model-Support
+        ai_result = await get_ai_response_with_model(
+            current_message=user_message,
+            chat_history=history,
+            username=username,
+            thread_id=thread_id,
+            persona=current_persona,
+            model_override=model_override
+        )
+        
+        raw_response = ai_result['content']
+        model_info = ai_result['model_info']
+        
+        # Markdown rendern
         rendered_response = render_markdown_simple(raw_response)
         
-        # KI-Antwort in Thread speichern
-        save_message_to_thread(username, thread_id, "assistant", raw_response)
+        # AI-Antwort mit Model-Info speichern
+        save_message_to_thread_with_model(
+            username, thread_id, "assistant", raw_response, model_info
+        )
         
-        # Auto-Titel für neue Threads (nach erster Nachricht)
+        # Auto-Titel für neue Threads
         thread_info = get_thread_info(username, thread_id)
         if thread_info and thread_info['message_count'] <= 2 and thread_id != 'default':
             update_thread_title_from_first_message(username, thread_id)
         
-        # Thread-Cache invalidieren
+        # Caches invalidieren
         invalidate_thread_cache(username)
+        invalidate_model_cache(username)
         
         return {
             "reply": rendered_response,
             "raw_reply": raw_response,
             "thread_id": thread_id,
+            "model_info": {
+                "model_used": model_info['model_used'],
+                "provider": model_info['provider'],
+                "tokens_used": model_info['tokens_used'],
+                "response_time": model_info['duration'],
+                "cost": model_info['cost'],
+                "is_fallback": model_info.get('is_fallback', False)
+            },
             "remaining_messages": {
                 "hour": rate_limit_result["remaining_hour"],
                 "day": rate_limit_result["remaining_day"]
@@ -2470,8 +3234,312 @@ async def chat_with_threading(req: Request):
         }
         
     except Exception as e:
-        logger.error(f"Chat error for {username} in thread {thread_id}: {str(e)}")
+        logger.error(f"Multi-model chat error for {username}: {str(e)}")
         return {"reply": "Ein Fehler ist aufgetreten. Versuche es erneut."}
+
+# ──────────────────────────────
+# Model Selection Routes
+# ──────────────────────────────
+
+@app.get("/models", response_class=HTMLResponse)
+async def model_selection_page(request: Request):
+    """Model-Auswahl-Seite"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    # Verfügbare Modelle für User
+    available_models = get_available_models_for_user_cached(username)
+    current_model = get_user_preferred_model_cached(username)
+    
+    # User-Statistiken
+    user_stats = get_user_model_stats(username)
+    
+    # Provider-Status
+    provider_status = {}
+    for provider in ModelProvider:
+        provider_obj = model_manager.providers.get(provider)
+        provider_status[provider.value] = {
+            'available': provider_obj.is_available if provider_obj else False,
+            'name': provider.value.title()
+        }
+    
+    return templates.TemplateResponse("models.html", {
+        "request": request,
+        "username": username,
+        "available_models": available_models,
+        "current_model": current_model,
+        "user_stats": user_stats,
+        "provider_status": provider_status,
+        "subscription_tiers": SUBSCRIPTION_TIERS
+    })
+
+@app.post("/models/select")
+async def select_model(request: Request, model_id: str = Form(...)):
+    """Model für User auswählen"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    available_models = get_available_models_for_user_cached(username)
+    
+    if model_id in available_models:
+        set_user_preferred_model(username, model_id)
+        invalidate_model_cache(username)
+        
+        model_name = available_models[model_id].display_name
+        logger.info(f"[MODELS] {username} selected model: {model_name}")
+        
+        return RedirectResponse("/models?success=model_selected", status_code=302)
+    else:
+        return RedirectResponse("/models?error=invalid_model", status_code=302)
+
+@app.post("/threads/{thread_id}/model")
+async def set_thread_model(request: Request, thread_id: str, model_id: str = Form(...)):
+    """Setzt Model für einen spezifischen Thread"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    available_models = get_available_models_for_user_cached(username)
+    
+    if model_id in available_models or model_id == "default":
+        if model_id == "default":
+            model_id = None  # NULL = verwende User-Default
+        
+        set_thread_preferred_model(username, thread_id, model_id)
+        
+        return {"success": True, "message": "Thread-Model aktualisiert"}
+    else:
+        return {"success": False, "message": "Model nicht verfügbar"}
+
+@app.get("/api/models/available")
+async def api_get_available_models(request: Request):
+    """API für verfügbare Modelle"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    username = request.session.get("username")
+    available_models = get_available_models_for_user_cached(username)
+    
+    models_data = {}
+    for model_id, model in available_models.items():
+        models_data[model_id] = {
+            "display_name": model.display_name,
+            "description": model.description,
+            "provider": model.provider.value,
+            "capabilities": model.capabilities,
+            "cost_per_1k_tokens": model.cost_per_1k_tokens,
+            "personality": model.personality,
+            "subscription_tier": model.subscription_tier
+        }
+    
+    return {
+        "models": models_data,
+        "current_model": get_user_preferred_model_cached(username)
+    }
+
+@app.get("/api/models/stats")
+async def api_model_stats(request: Request):
+    """API für Model-Statistiken"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    username = request.session.get("username")
+    stats = get_user_model_stats(username)
+    
+    return stats
+
+# ──────────────────────────────
+# Admin Model Management
+# ──────────────────────────────
+
+@app.get("/admin/models", response_class=HTMLResponse)
+async def admin_models_page(request: Request):
+    """Admin-Seite für Model-Management"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    # Globale Model-Statistiken
+    global_stats = get_global_model_stats()
+    
+    # Provider-Status
+    provider_status = {}
+    for provider in ModelProvider:
+        provider_obj = model_manager.providers.get(provider)
+        provider_status[provider.value] = {
+            'available': provider_obj.is_available if provider_obj else False,
+            'models_count': len([m for m in AI_MODELS.values() if m.provider == provider and m.is_active])
+        }
+    
+    # Model-Konfiguration
+    models_config = {}
+    for model_id, model in AI_MODELS.items():
+        models_config[model_id] = {
+            'display_name': model.display_name,
+            'provider': model.provider.value,
+            'is_active': model.is_active,
+            'subscription_tier': model.subscription_tier,
+            'cost_per_1k_tokens': model.cost_per_1k_tokens
+        }
+    
+    return templates.TemplateResponse("admin_models.html", {
+        "request": request,
+        "global_stats": global_stats,
+        "provider_status": provider_status,
+        "models_config": models_config
+    })
+
+@app.post("/admin/models/test-providers")
+async def admin_test_providers(request: Request):
+    """Testet alle Provider manuell"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    # Test als Background-Task starten
+    task_id = await task_manager.run_task(
+        "manual_provider_test",
+        test_model_providers
+    )
+    
+    logger.info(f"[ADMIN] Manual provider test started (Task ID: {task_id})")
+    return RedirectResponse("/admin/models?test_started=1", status_code=302)
+
+@app.post("/admin/models/{model_id}/toggle")
+async def admin_toggle_model(request: Request, model_id: str):
+    """Aktiviert/Deaktiviert ein Model (Admin)"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    if model_id in AI_MODELS:
+        AI_MODELS[model_id].is_active = not AI_MODELS[model_id].is_active
+        status = "aktiviert" if AI_MODELS[model_id].is_active else "deaktiviert"
+        
+        logger.info(f"[ADMIN] Model {model_id} {status}")
+        return {"success": True, "message": f"Model {status}"}
+    else:
+        return {"success": False, "message": "Model nicht gefunden"}
+
+@app.get("/admin/models/usage/{username}")
+async def admin_user_model_usage(request: Request, username: str):
+    """Admin-Ansicht für User-Model-Usage"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    user_stats = get_user_model_stats(username)
+    
+    return templates.TemplateResponse("admin_user_models.html", {
+        "request": request,
+        "target_username": username,
+        "user_stats": user_stats
+    })
+
+# ──────────────────────────────
+# Model Integration in Chat-Template
+# ──────────────────────────────
+
+@app.get("/api/chat/models")
+async def api_chat_models_info(request: Request):
+    """Model-Info für Chat-Interface"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    username = request.session.get("username")
+    thread_id = request.query_params.get('thread', get_current_thread_id(request))
+    
+    # Aktuelles Model für Thread
+    thread_model = get_thread_preferred_model(username, thread_id)
+    user_model = get_user_preferred_model_cached(username)
+    effective_model = thread_model or user_model
+    
+    # Verfügbare Modelle
+    available_models = get_available_models_for_user_cached(username)
+    
+    return {
+        "current_model": effective_model,
+        "thread_specific": thread_model is not None,
+        "available_models": {
+            model_id: {
+                "name": model.display_name,
+                "personality": model.personality,
+                "provider": model.provider.value
+            }
+            for model_id, model in available_models.items()
+        }
+    }
+
+# ──────────────────────────────
+# Cost Tracking und Billing
+# ──────────────────────────────
+
+@app.get("/api/models/costs")
+async def api_model_costs(request: Request):
+    """API für Model-Kosten des Users"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    username = request.session.get("username")
+    
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Kosten der letzten 30 Tage
+        cursor.execute("""
+            SELECT DATE(timestamp) as date, 
+                   SUM(cost) as daily_cost,
+                   COUNT(*) as requests
+            FROM model_usage 
+            WHERE username = ? AND timestamp >= datetime('now', '-30 days')
+            GROUP BY DATE(timestamp)
+            ORDER BY date DESC
+        """, (username,))
+        
+        daily_costs = cursor.fetchall()
+        
+        # Gesamtkosten pro Model
+        cursor.execute("""
+            SELECT model_name, SUM(cost) as total_cost, COUNT(*) as usage_count
+            FROM model_usage 
+            WHERE username = ?
+            GROUP BY model_name
+            ORDER BY total_cost DESC
+        """, (username,))
+        
+        model_costs = cursor.fetchall()
+        
+        conn.close()
+        
+        return {
+            "daily_costs": [
+                {"date": row[0], "cost": round(row[1], 4), "requests": row[2]}
+                for row in daily_costs
+            ],
+            "model_costs": [
+                {"model": row[0], "total_cost": round(row[1], 4), "usage_count": row[2]}
+                for row in model_costs
+            ],
+            "total_cost": sum(row[1] for row in model_costs)
+        }
+        
+    except sqlite3.OperationalError:
+        return {"daily_costs": [], "model_costs": [], "total_cost": 0}
 
 # ──────────────────────────────
 # Chat Search Routes
@@ -3830,6 +4898,8 @@ async def cache_cleanup_background():
 @app.on_event("startup")  
 async def startup():
     init_db()
-    upgrade_database_for_threading()  # NEU: Threading-Support
+    upgrade_database_for_threading()
+    upgrade_database_for_models()  # NEU: Multi-Model-Support
     setup_background_tasks()
-    logger.info("[STARTUP] KI-Chat mit Threading und Background-Tasks gestartet")
+    setup_model_background_tasks()  # NEU: Model-Tasks
+    logger.info("[STARTUP] KI-Chat mit Multi-AI-Models gestartet")
