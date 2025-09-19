@@ -1042,6 +1042,35 @@ def upgrade_database_for_models():
 # ──────────────────────────────
 # Model Preference Management
 # ──────────────────────────────
+# ──────────────────────────────
+# Model Availability (Cached) das kamm von ChtaGPT
+# ──────────────────────────────
+
+@cache_result("available_models", ttl=300)
+def get_available_models_for_user_cached(username: str) -> Dict[str, Any]:
+    """
+    Liefert die für einen User verfügbaren Modelle (cached).
+    Greift auf AI_MODELS zurück, filtert nach Subscription.
+    """
+    try:
+        # Hole das aktuelle Subscription-Tier des Users
+        tier = get_user_subscription_tier(username)
+        tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["free"])
+
+        available_models = {}
+        for model_id, model in AI_MODELS.items():
+            if not model.is_active:
+                continue
+            # nur Modelle, die im Tier erlaubt sind
+            if model.subscription_tier and model.subscription_tier not in [tier, "free"]:
+                continue
+            available_models[model_id] = model
+
+        return available_models
+    except Exception as e:
+        logger.error(f"[MODELS] Error getting available models for {username}: {e}")
+        return {}
+
 
 def get_user_preferred_model(username: str) -> str:
     """Holt bevorzugtes Model des Users"""
