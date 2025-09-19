@@ -1136,6 +1136,21 @@ def set_thread_preferred_model(username: str, thread_id: str, model_id: str):
         conn.rollback()
     finally:
         conn.close()
+# ──────────────────────────────
+# Cached wrappers & Invalidators (Models)
+# ──────────────────────────────
+
+@cache_result("user_preferred_model", ttl=300)
+def get_user_preferred_model_cached(username: str) -> str:
+    """Gecachte Variante von get_user_preferred_model."""
+    return get_user_preferred_model(username)
+
+def invalidate_model_cache(username: str):
+    """Löscht Model-bezogene Cache-Keys für den User."""
+    # verfügbare Modelle
+    app_cache.delete(f"available_models:{username}")
+    # bevorzugtes Nutzer-Modell
+    app_cache.delete(f"user_preferred_model:{username}")
 
 # ──────────────────────────────
 # Enhanced Chat Function mit Multi-Model-Support
