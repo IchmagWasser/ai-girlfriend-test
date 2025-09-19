@@ -1169,7 +1169,7 @@ def get_model_context_for_thread(username: str, thread_id: str) -> str:
     # 3. Default
     return "nexus"
 
-async def get_ai_response_with_model(current_message: str, chat_history: list, 
+async def get_ai_response_with_model(current_message: str, chat_history: list,
                                    username: str, thread_id: str, persona: str = "standard",
                                    model_override: str = None) -> Dict:
     """
@@ -1177,38 +1177,28 @@ async def get_ai_response_with_model(current_message: str, chat_history: list,
     """
     # Model bestimmen
     model_to_use = model_override or get_model_context_for_thread(username, thread_id)
-    
-    # Nachrichten für Model formatieren
+
+    # Nachrichten vorbereiten
     messages = []
-    
-    # System-Prompt basierend auf Persona UND Model
+
+    # System-Prompt basierend auf Persona + Model
     persona_config = PERSONAS.get(persona, PERSONAS["standard"])
     model_config = AI_MODELS.get(model_to_use, AI_MODELS["nexus"])
-    
-    # Kombinierter System-Prompt
     system_prompt = f"{persona_config['system_prompt']}\n\nDu bist {model_config.display_name}: {model_config.personality}"
-    
-    messages.append({
-        "role": "system",
-        "content": system_prompt
-    })
-    
-    # Chat-Historie hinzufügen
-    for msg in chat_history[-20:]:  # Letzte 20 Nachrichten
+
+    messages.append({"role": "system", "content": system_prompt})
+
+    # Chat-Historie (letzte 20 Nachrichten)
+    for msg in chat_history[-20:]:
         if msg["role"] in ["user", "assistant"]:
-            messages.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
-    
-    # Aktuelle Nachricht
-    messages.append({
-        "role": "user",
-        "content": current_message
-    })
-    
+            messages.append({"role": msg["role"], "content": msg["content"]})
+
+    # aktuelle Nachricht
+    messages.append({"role": "user", "content": current_message})
+
     # Response vom Model-Manager holen
     try:
+        t0 = _pytime.time()
         result = await model_manager.generate_response(
             model_id=model_to_use,
             messages=messages,
@@ -1216,6 +1206,55 @@ async def get_ai_response_with_model(current_message: str, chat_history: list,
             temperature=0.7,
             max_tokens=2000
         )
+        duration = _pytime.time() - t0
+
+        # Ergebnis normalisieren
+        if isinstance(result, dict):
+            content = result.get("content", "")
+            tokens_used = result.get("tokens_used", 0)
+            cost = result.get("cost", 0.0)
+        else:
+            content = str(result)
+            tokens_used = 0
+            cost = 0.0
+
+        return {
+            "content": content,
+            "model_info": {
+                "model_used": model_to_use,
+                "provider": getattr(model_config, "provider", None).value if hasattr(model_config, "provider") else "unknown",
+                "tokens_used": tokens_used,
+                "duration": duration,
+                "cost": cost,
+                "is_fallback": False
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"[MODELS] generate_response failed for {model_to_use}: {e}")
+
+        # Fallback – versuch über get_response_with_messages
+        try:
+            t1 = _pytime.time()
+            fallback_content = get_response_with_messages(messages)
+            duration_fb = _pytime.time() - t1
+        except Exception as inner:
+            logger.error(f"[MODELS] Fallback failed: {inner}")
+            fallback_content = "Entschuldige, es ist ein Fehler aufgetreten."
+            duration_fb = 0.0
+
+        return {
+            "content": fallback_content,
+            "model_info": {
+                "model_used": "fallback_local",
+                "provider": "local",
+                "tokens_used": 0,
+                "duration": duration_fb,
+                "cost": 0.0,
+                "is_fallback": True
+            }
+        }
+
         
         
 
