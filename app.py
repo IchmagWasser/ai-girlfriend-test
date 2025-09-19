@@ -1043,9 +1043,10 @@ def upgrade_database_for_models():
 # Model Preference Management
 # ──────────────────────────────
 # ──────────────────────────────
-# Model Availability (Cached) das kamm von ChtaGPT
+# Model Preference Management + Cached wrappers
 # ──────────────────────────────
 
+# Verfügbare Modelle (cached)
 @cache_result("available_models", ttl=300)
 def get_available_models_for_user_cached(username: str) -> Dict[str, Any]:
     """
@@ -1053,16 +1054,16 @@ def get_available_models_for_user_cached(username: str) -> Dict[str, Any]:
     Greift auf AI_MODELS zurück, filtert nach Subscription.
     """
     try:
-        # Hole das aktuelle Subscription-Tier des Users
         tier = get_user_subscription_tier(username)
-        tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["free"])
+        tier_config = SUBSCRIPTION_TIERS.get(tier, SUBSCRIPTION_TIERS["free"])  # falls du es brauchst
 
         available_models = {}
         for model_id, model in AI_MODELS.items():
-            if not model.is_active:
+            if not getattr(model, "is_active", True):
                 continue
-            # nur Modelle, die im Tier erlaubt sind
-            if model.subscription_tier and model.subscription_tier not in [tier, "free"]:
+            # Nur Modelle zulassen, die zum Tier passen (anpassen falls deine Logik anders ist)
+            allowed_tier = getattr(model, "subscription_tier", "free")
+            if allowed_tier not in [tier, "free"]:
                 continue
             available_models[model_id] = model
 
@@ -1076,7 +1077,6 @@ def get_user_preferred_model(username: str) -> str:
     """Holt bevorzugtes Model des Users"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     try:
         cursor.execute("SELECT preferred_model FROM users WHERE username = ?", (username,))
         result = cursor.fetchone()
@@ -1087,27 +1087,28 @@ def get_user_preferred_model(username: str) -> str:
     finally:
         conn.close()
 
+
 def set_user_preferred_model(username: str, model_id: str):
     """Setzt bevorzugtes Model für User"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     try:
-        cursor.execute("UPDATE users SET preferred_model = ? WHERE username = ?", 
-                      (model_id, username))
+        cursor.execute("UPDATE users SET preferred_model = ? WHERE username = ?", (model_id, username))
         conn.commit()
         logger.info(f"[MODELS] User {username} preferred model set to {model_id}")
+        # Cache sofort invalidieren, damit UI direkt das neue Model sieht
+        invalidate_model_cache(username)
     except Exception as e:
         logger.error(f"[MODELS] Error setting preferred model: {e}")
         conn.rollback()
     finally:
         conn.close()
 
+
 def get_thread_preferred_model(username: str, thread_id: str) -> Optional[str]:
     """Holt Thread-spezifisches Model"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     try:
         cursor.execute("""
             SELECT preferred_model FROM chat_threads 
@@ -1120,22 +1121,26 @@ def get_thread_preferred_model(username: str, thread_id: str) -> Optional[str]:
     finally:
         conn.close()
 
+
 def set_thread_preferred_model(username: str, thread_id: str, model_id: str):
     """Setzt Thread-spezifisches Model"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     try:
         cursor.execute("""
             UPDATE chat_threads SET preferred_model = ? 
             WHERE id = ? AND username = ?
         """, (model_id, thread_id, username))
         conn.commit()
+        # Optional: auch hier Cache leeren, falls du thread-spezifisch cachen willst
+        invalidate_model_cache(username)
     except Exception as e:
         logger.error(f"[MODELS] Error setting thread model: {e}")
         conn.rollback()
     finally:
         conn.close()
+
+
 # ──────────────────────────────
 # Cached wrappers & Invalidators (Models)
 # ──────────────────────────────
@@ -1145,12 +1150,64 @@ def get_user_preferred_model_cached(username: str) -> str:
     """Gecachte Variante von get_user_preferred_model."""
     return get_user_preferred_model(username)
 
+
 def invalidate_model_cache(username: str):
     """Löscht Model-bezogene Cache-Keys für den User."""
     # verfügbare Modelle
     app_cache.delete(f"available_models:{username}")
     # bevorzugtes Nutzer-Modell
     app_cache.delete(f"user_preferred_model:{username}")
+
+# ──────────────────────────────
+# Model Usage Statistics
+# ──────────────────────────────
+
+def get_user_model_stats(username: str) -> Dict[str, Any]:
+    """Liefert Nutzungs- und Kostenstatistiken pro Model für einen User."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        # Daily Kosten (letzte 30 Tage)
+        cursor.execute("""
+            SELECT DATE(timestamp) as day,
+                   SUM(cost) as total_cost,
+                   COUNT(*) as requests
+            FROM model_usage
+            WHERE username = ? AND timestamp >= datetime('now', '-30 days')
+            GROUP BY DATE(timestamp)
+            ORDER BY day DESC
+        """, (username,))
+        daily = cursor.fetchall()
+
+        # Gesamtkosten pro Modell
+        cursor.execute("""
+            SELECT model_name,
+                   SUM(cost) as total_cost,
+                   COUNT(*) as requests
+            FROM model_usage
+            WHERE username = ?
+            GROUP BY model_name
+            ORDER BY total_cost DESC
+        """, (username,))
+        totals = cursor.fetchall()
+
+        return {
+            "daily": [
+                {"date": row[0], "cost": round(row[1] or 0, 4), "requests": row[2]}
+                for row in daily
+            ],
+            "totals": [
+                {"model": row[0], "cost": round(row[1] or 0, 4), "requests": row[2]}
+                for row in totals
+            ],
+            "total_cost": round(sum(row[1] or 0 for row in totals), 4)
+        }
+    except sqlite3.OperationalError:
+        # Tabelle model_usage existiert evtl. noch nicht
+        return {"daily": [], "totals": [], "total_cost": 0}
+    finally:
+        conn.close()
+
 
 # ──────────────────────────────
 # Enhanced Chat Function mit Multi-Model-Support
