@@ -4932,13 +4932,96 @@ async def cache_cleanup_background():
             await asyncio.sleep(300)
 
 # ──────────────────────────────
-# Startup
+# Startup / Shutdown
 # ──────────────────────────────
-@app.on_event("startup")  
+
+def _ensure_runtime_files():
+    """Erstellt fehlende Dateien/Ordner und prüft Basisvoraussetzungen."""
+    # Rate-Limit-Datei anlegen, wenn nicht vorhanden
+    try:
+        if RATE_LIMIT_FILE and not os.path.exists(RATE_LIMIT_FILE):
+            with open(RATE_LIMIT_FILE, "w", encoding="utf-8") as f:
+                json.dump({}, f)
+            logger.info(f"[STARTUP] Created {RATE_LIMIT_FILE}")
+    except Exception as e:
+        logger.error(f"[STARTUP] Could not prepare {RATE_LIMIT_FILE}: {e}")
+
+    # Datenbank-Datei prüfen (init_db/Upgrades übernehmen die Schema-Seite)
+    try:
+        if DB_PATH:
+            # Datei wird von sqlite bei erster Verbindung erzeugt;
+            # wir lassen init_db() die Tabellen anlegen.
+            pass
+    except Exception as e:
+        logger.error(f"[STARTUP] DB pre-check failed: {e}")
+
+
+def _maybe_print_route_map():
+    """Optional: Routenübersicht ausgeben (aktivieren mit env PRINT_ROUTE_MAP=1)."""
+    if os.getenv("PRINT_ROUTE_MAP", "0") != "1":
+        return
+    try:
+        print("\n=== ROUTE MAP (order matters) ===")
+        for r in app.router.routes:
+            path = getattr(r, "path", None)
+            methods = getattr(r, "methods", None)
+            ep = getattr(r, "endpoint", None)
+            mod = ep.__module__ if ep else "?"
+            nm = ep.__name__ if ep else "?"
+            if path:
+                print(f"{methods} {path} -> {mod}.{nm}")
+        print("=== END ROUTE MAP ===\n")
+    except Exception as e:
+        logger.error(f"[STARTUP] Route-map print failed: {e}")
+
+
+@app.on_event("startup")
 async def startup():
-    init_db()
-    upgrade_database_for_threading()
-    upgrade_database_for_models()  # NEU: Multi-Model-Support
-    setup_background_tasks()
-    setup_model_background_tasks()  # NEU: Model-Tasks
-    logger.info("[STARTUP] KI-Chat mit Multi-AI-Models gestartet")
+    """App-Startup: DB initialisieren, Upgrades, Caches, Background-Tasks."""
+    try:
+        logger.info("[STARTUP] Initializing application…")
+
+        # 1) Dateien/Umgebung sicherstellen
+        _ensure_runtime_files()
+
+        # 2) DB initialisieren & upgraden (Reihenfolge beachten)
+        init_db()  # Tabellen & Default-Admin etc.
+        upgrade_database_for_threading()   # thread_id, chat_threads, defaults
+        upgrade_database_for_models()      # preferred_model, model_usage-Felder
+
+        # 3) Caches optional vorwärmen / leeren (hier: nur sauberer Start)
+        if hasattr(app_cache, "clear"):
+            app_cache.clear()
+
+        # 4) Background-Tasks registrieren & Scheduler starten
+        setup_background_tasks()
+
+        # 5) Optional: Routenübersicht zur Kontrolle
+        _maybe_print_route_map()
+
+        logger.info("[STARTUP] KI-Chat mit Multi-AI-Models gestartet ✅")
+    except Exception as e:
+        # Startup-Fehler deutlich loggen und erneut werfen, damit Render nicht im Halbschaden läuft
+        logger.exception(f"[STARTUP] Failed to start application: {e}")
+        raise
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Sauberes Herunterfahren (Scheduler stoppen, Ressourcen freigeben)."""
+    try:
+        # Task-Scheduler anhalten (falls verfügbar)
+        if hasattr(task_manager, "scheduler_running"):
+            task_manager.scheduler_running = False
+
+        # Laufende Tasks abbrechen (optional)
+        if hasattr(task_manager, "running_tasks"):
+            for task_id, a_task in list(task_manager.running_tasks.items()):
+                try:
+                    a_task.cancel()
+                except Exception:
+                    pass
+
+        logger.info("[SHUTDOWN] Application shutdown complete ✅")
+    except Exception as e:
+        logger.error(f"[SHUTDOWN] Error during shutdown: {e}")
