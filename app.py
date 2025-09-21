@@ -32,9 +32,28 @@ from enum import Enum
 import traceback
 import uuid
 
+import mimetypes
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, BinaryIO
+import magic
+
+from fastapi import UploadFile, File
+from fastapi.responses import FileResponse
+
+from dataclasses import dataclass
+from enum import Enum
+
 import openai
 import httpx
 from abc import ABC, abstractmethod
+try:
+    import PyPDF2
+    from docx import Document
+    from PIL import Image
+    import pytesseract
+except ImportError as e:
+    logger.warning(f"[FILES] Some file processing libraries missing: {e}")
+
 
 def upgrade_database_for_threading():
     """Erweitert die Datenbank um Threading-Support"""
@@ -3060,6 +3079,1153 @@ def get_response_with_context(current_message: str, chat_history: list, persona:
     # An get_response weitergeben
     return get_response_with_messages(messages)
 
+# ──────────────────────────────
+# File Types and Configuration
+# ──────────────────────────────
+
+class FileType(Enum):
+    PDF = "pdf"
+    DOCX = "docx"
+    TXT = "txt"
+    IMAGE = "image"
+    UNKNOWN = "unknown"
+
+ALLOWED_MIME_TYPES = {
+    'application/pdf': FileType.PDF,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': FileType.DOCX,
+    'text/plain': FileType.TXT,
+    'image/jpeg': FileType.IMAGE,
+    'image/png': FileType.IMAGE,
+    'image/gif': FileType.IMAGE,
+    'image/bmp': FileType.IMAGE,
+    'image/tiff': FileType.IMAGE
+}
+
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+MAX_FILES_PER_USER = 100
+UPLOAD_DIR = "uploads"
+CHUNK_SIZE = 1000  # Zeichen pro Text-Chunk
+
+@dataclass
+class ProcessedFile:
+    """Information über eine verarbeitete Datei"""
+    id: str
+    original_name: str
+    file_type: FileType
+    file_size: int
+    upload_date: datetime
+    text_content: str
+    chunks: List[str]
+    metadata: Dict
+    username: str
+    thread_id: Optional[str] = None
+
+@dataclass
+class FileChunk:
+    """Ein Text-Chunk aus einer Datei"""
+    chunk_id: str
+    file_id: str
+    content: str
+    chunk_index: int
+    char_count: int
+
+# ──────────────────────────────
+# File Storage Management
+# ──────────────────────────────
+
+def ensure_upload_directory():
+    """Stellt sicher dass Upload-Verzeichnis existiert"""
+    upload_path = Path(UPLOAD_DIR)
+    upload_path.mkdir(exist_ok=True)
+    return upload_path
+
+def generate_file_id(username: str, filename: str) -> str:
+    """Generiert eindeutige File-ID"""
+    timestamp = datetime.now().isoformat()
+    content = f"{username}:{filename}:{timestamp}"
+    return hashlib.md5(content.encode()).hexdigest()[:16]
+
+def get_file_path(file_id: str) -> Path:
+    """Holt Dateipfad für File-ID"""
+    upload_path = ensure_upload_directory()
+    return upload_path / f"{file_id}.dat"
+
+def detect_file_type(file_content: bytes, filename: str) -> Tuple[FileType, str]:
+    """Erkennt Dateityp basierend auf Inhalt und Name"""
+    try:
+        # Magic number detection
+        mime_type = magic.from_buffer(file_content, mime=True)
+        
+        if mime_type in ALLOWED_MIME_TYPES:
+            return ALLOWED_MIME_TYPES[mime_type], mime_type
+        
+        # Fallback auf Dateiendung
+        _, ext = os.path.splitext(filename.lower())
+        if ext == '.pdf':
+            return FileType.PDF, 'application/pdf'
+        elif ext == '.docx':
+            return FileType.DOCX, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        elif ext == '.txt':
+            return FileType.TXT, 'text/plain'
+        elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff']:
+            return FileType.IMAGE, f'image/{ext[1:]}'
+        
+    except Exception as e:
+        logger.error(f"[FILES] File type detection error: {e}")
+    
+    return FileType.UNKNOWN, 'application/octet-stream'
+
+# ──────────────────────────────
+# Text Extraction
+# ──────────────────────────────
+
+def extract_text_from_pdf(file_path: Path) -> Tuple[str, Dict]:
+    """Extrahiert Text aus PDF-Datei"""
+    try:
+        text_content = ""
+        metadata = {"pages": 0, "extraction_method": "PyPDF2"}
+        
+        with open(file_path, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            metadata["pages"] = len(pdf_reader.pages)
+            
+            for page_num, page in enumerate(pdf_reader.pages):
+                try:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_content += f"\n--- Seite {page_num + 1} ---\n"
+                        text_content += page_text
+                        text_content += "\n"
+                except Exception as e:
+                    logger.warning(f"[FILES] Error extracting page {page_num}: {e}")
+                    continue
+        
+        # PDF-Metadaten
+        try:
+            if pdf_reader.metadata:
+                metadata.update({
+                    "title": pdf_reader.metadata.get('/Title', ''),
+                    "author": pdf_reader.metadata.get('/Author', ''),
+                    "subject": pdf_reader.metadata.get('/Subject', ''),
+                    "creator": pdf_reader.metadata.get('/Creator', '')
+                })
+        except:
+            pass
+        
+        return text_content.strip(), metadata
+        
+    except Exception as e:
+        logger.error(f"[FILES] PDF extraction error: {e}")
+        return "", {"error": str(e), "extraction_method": "failed"}
+
+def extract_text_from_docx(file_path: Path) -> Tuple[str, Dict]:
+    """Extrahiert Text aus DOCX-Datei"""
+    try:
+        doc = Document(file_path)
+        
+        text_content = ""
+        metadata = {
+            "paragraphs": 0,
+            "tables": 0,
+            "extraction_method": "python-docx"
+        }
+        
+        # Paragraphen extrahieren
+        for para in doc.paragraphs:
+            if para.text.strip():
+                text_content += para.text + "\n"
+                metadata["paragraphs"] += 1
+        
+        # Tabellen extrahieren
+        for table in doc.tables:
+            metadata["tables"] += 1
+            text_content += "\n--- Tabelle ---\n"
+            
+            for row in table.rows:
+                row_text = []
+                for cell in row.cells:
+                    row_text.append(cell.text.strip())
+                text_content += " | ".join(row_text) + "\n"
+            text_content += "\n"
+        
+        # Core Properties
+        try:
+            core_props = doc.core_properties
+            metadata.update({
+                "title": core_props.title or "",
+                "author": core_props.author or "",
+                "subject": core_props.subject or "",
+                "created": str(core_props.created) if core_props.created else "",
+                "modified": str(core_props.modified) if core_props.modified else ""
+            })
+        except:
+            pass
+        
+        return text_content.strip(), metadata
+        
+    except Exception as e:
+        logger.error(f"[FILES] DOCX extraction error: {e}")
+        return "", {"error": str(e), "extraction_method": "failed"}
+
+def extract_text_from_image(file_path: Path) -> Tuple[str, Dict]:
+    """Extrahiert Text aus Bild mit OCR"""
+    try:
+        # OCR mit Tesseract
+        image = Image.open(file_path)
+        text_content = pytesseract.image_to_string(image, lang='deu+eng')
+        
+        metadata = {
+            "extraction_method": "tesseract_ocr",
+            "image_size": image.size,
+            "image_mode": image.mode,
+            "format": image.format
+        }
+        
+        return text_content.strip(), metadata
+        
+    except Exception as e:
+        logger.error(f"[FILES] Image OCR error: {e}")
+        return "", {"error": str(e), "extraction_method": "ocr_failed"}
+
+def extract_text_from_txt(file_path: Path) -> Tuple[str, Dict]:
+    """Extrahiert Text aus TXT-Datei"""
+    try:
+        # Verschiedene Encodings versuchen
+        encodings = ['utf-8', 'utf-16', 'latin1', 'cp1252']
+        
+        for encoding in encodings:
+            try:
+                with open(file_path, 'r', encoding=encoding) as file:
+                    text_content = file.read()
+                
+                metadata = {
+                    "extraction_method": "text_file",
+                    "encoding": encoding,
+                    "line_count": text_content.count('\n') + 1
+                }
+                
+                return text_content.strip(), metadata
+                
+            except UnicodeDecodeError:
+                continue
+        
+        # Wenn alle Encodings fehlschlagen
+        return "", {"error": "Encoding detection failed", "extraction_method": "failed"}
+        
+    except Exception as e:
+        logger.error(f"[FILES] TXT extraction error: {e}")
+        return "", {"error": str(e), "extraction_method": "failed"}
+
+# ──────────────────────────────
+# Text Chunking
+# ──────────────────────────────
+
+def create_text_chunks(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = 100) -> List[str]:
+    """Teilt Text in überlappende Chunks für besseren Kontext"""
+    if not text or len(text) <= chunk_size:
+        return [text] if text else []
+    
+    chunks = []
+    start = 0
+    
+    while start < len(text):
+        end = start + chunk_size
+        
+        # Bei letztem Chunk: nehme alles was übrig ist
+        if end >= len(text):
+            chunk = text[start:]
+            if chunk.strip():
+                chunks.append(chunk.strip())
+            break
+        
+        # Versuche bei Wort-/Satzgrenze zu trennen
+        chunk_text = text[start:end]
+        
+        # Suche nach bestem Trennpunkt
+        best_split = end
+        for delimiter in ['\n\n', '. ', '\n', ', ']:
+            last_occurrence = chunk_text.rfind(delimiter)
+            if last_occurrence > chunk_size * 0.7:  # Mindestens 70% des Chunks
+                best_split = start + last_occurrence + len(delimiter)
+                break
+        
+        chunk = text[start:best_split].strip()
+        if chunk:
+            chunks.append(chunk)
+        
+        # Nächster Start mit Überlappung
+        start = best_split - overlap
+        if start < 0:
+            start = best_split
+    
+    return chunks
+
+def create_smart_summary(text: str, max_length: int = 500) -> str:
+    """Erstellt intelligente Zusammenfassung eines Textes"""
+    if len(text) <= max_length:
+        return text
+    
+    # Erste Sätze nehmen bis max_length erreicht
+    sentences = text.split('. ')
+    summary_parts = []
+    current_length = 0
+    
+    for sentence in sentences:
+        sentence_with_period = sentence + '. ' if not sentence.endswith('.') else sentence + ' '
+        
+        if current_length + len(sentence_with_period) <= max_length:
+            summary_parts.append(sentence_with_period)
+            current_length += len(sentence_with_period)
+        else:
+            break
+    
+    summary = ''.join(summary_parts).strip()
+    
+    if current_length < len(text):
+        summary += "..."
+    
+    return summary
+
+# ──────────────────────────────
+# File Processing Pipeline
+# ──────────────────────────────
+
+def process_uploaded_file(file_content: bytes, filename: str, username: str, 
+                         thread_id: Optional[str] = None) -> ProcessedFile:
+    """Hauptfunktion zur Dateiverarbeitung"""
+    
+    # File-ID generieren
+    file_id = generate_file_id(username, filename)
+    
+    # Dateityp erkennen
+    file_type, mime_type = detect_file_type(file_content, filename)
+    
+    if file_type == FileType.UNKNOWN:
+        raise ValueError(f"Dateityp nicht unterstützt: {mime_type}")
+    
+    # Datei temporär speichern
+    file_path = get_file_path(file_id)
+    
+    try:
+        with open(file_path, 'wb') as f:
+            f.write(file_content)
+        
+        # Text extrahieren
+        text_content = ""
+        metadata = {"mime_type": mime_type}
+        
+        if file_type == FileType.PDF:
+            text_content, extraction_metadata = extract_text_from_pdf(file_path)
+        elif file_type == FileType.DOCX:
+            text_content, extraction_metadata = extract_text_from_docx(file_path)
+        elif file_type == FileType.TXT:
+            text_content, extraction_metadata = extract_text_from_txt(file_path)
+        elif file_type == FileType.IMAGE:
+            text_content, extraction_metadata = extract_text_from_image(file_path)
+        else:
+            raise ValueError(f"Unbekannter Dateityp: {file_type}")
+        
+        metadata.update(extraction_metadata)
+        
+        # Text-Chunks erstellen
+        chunks = create_text_chunks(text_content) if text_content else []
+        
+        # Summary erstellen
+        summary = create_smart_summary(text_content) if text_content else "Keine Textinhalte gefunden"
+        metadata["summary"] = summary
+        metadata["chunks_count"] = len(chunks)
+        metadata["text_length"] = len(text_content)
+        
+        # ProcessedFile-Objekt erstellen
+        processed_file = ProcessedFile(
+            id=file_id,
+            original_name=filename,
+            file_type=file_type,
+            file_size=len(file_content),
+            upload_date=datetime.now(),
+            text_content=text_content,
+            chunks=chunks,
+            metadata=metadata,
+            username=username,
+            thread_id=thread_id
+        )
+        
+        return processed_file
+        
+    except Exception as e:
+        # Aufräumen bei Fehler
+        if file_path.exists():
+            file_path.unlink()
+        raise e
+
+def validate_file_upload(file_content: bytes, filename: str, username: str) -> Tuple[bool, str]:
+    """Validiert Upload-Datei"""
+    
+    # Größe prüfen
+    if len(file_content) > MAX_FILE_SIZE:
+        return False, f"Datei zu groß (max. {MAX_FILE_SIZE // (1024*1024)} MB)"
+    
+    if len(file_content) == 0:
+        return False, "Datei ist leer"
+    
+    # Dateityp prüfen
+    file_type, mime_type = detect_file_type(file_content, filename)
+    if file_type == FileType.UNKNOWN:
+        return False, f"Dateityp nicht unterstützt: {mime_type}"
+    
+    # User-Limit prüfen
+    user_file_count = get_user_file_count(username)
+    if user_file_count >= MAX_FILES_PER_USER:
+        return False, f"Maximale Anzahl Dateien erreicht ({MAX_FILES_PER_USER})"
+    
+    return True, "OK"
+
+def get_user_file_count(username: str) -> int:
+    """Zählt Dateien eines Users"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM uploaded_files WHERE username = ?", (username,))
+        count = cursor.fetchone()[0]
+        
+        conn.close()
+        return count
+        
+    except sqlite3.OperationalError:
+        return 0  # Tabelle existiert noch nicht
+
+# mach hier das aus dem zweiten artefakt fpr databesfunktion oder wie auch immer 
+# ──────────────────────────────
+# Database Integration für File Processing
+# ──────────────────────────────
+
+def upgrade_database_for_files():
+    """Erweitert die Datenbank um File-Processing-Support"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Uploaded Files Tabelle
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS uploaded_files (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                thread_id TEXT,
+                original_name TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                mime_type TEXT,
+                upload_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                text_content TEXT,
+                summary TEXT,
+                metadata TEXT,
+                chunks_count INTEGER DEFAULT 0,
+                is_processed INTEGER DEFAULT 1,
+                FOREIGN KEY (username) REFERENCES users (username),
+                FOREIGN KEY (thread_id) REFERENCES chat_threads (id)
+            )
+        """)
+        
+        # File Chunks Tabelle für bessere Suche
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS file_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                char_count INTEGER DEFAULT 0,
+                FOREIGN KEY (file_id) REFERENCES uploaded_files (id)
+            )
+        """)
+        
+        # File Usage Tracking
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS file_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id TEXT NOT NULL,
+                username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                context TEXT,
+                FOREIGN KEY (file_id) REFERENCES uploaded_files (id),
+                FOREIGN KEY (username) REFERENCES users (username)
+            )
+        """)
+        
+        conn.commit()
+        logger.info("[FILES] Database upgraded for file processing")
+        
+    except Exception as e:
+        logger.error(f"[FILES] Database upgrade error: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+# ──────────────────────────────
+# File Database Operations
+# ──────────────────────────────
+
+def save_processed_file_to_db(processed_file: ProcessedFile) -> bool:
+    """Speichert verarbeitete Datei in der Datenbank"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Hauptdatei-Eintrag
+        cursor.execute("""
+            INSERT INTO uploaded_files 
+            (id, username, thread_id, original_name, file_type, file_size, 
+             mime_type, text_content, summary, metadata, chunks_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            processed_file.id,
+            processed_file.username,
+            processed_file.thread_id,
+            processed_file.original_name,
+            processed_file.file_type.value,
+            processed_file.file_size,
+            processed_file.metadata.get('mime_type', ''),
+            processed_file.text_content,
+            processed_file.metadata.get('summary', ''),
+            json.dumps(processed_file.metadata),
+            len(processed_file.chunks)
+        ))
+        
+        # Text-Chunks speichern
+        for i, chunk in enumerate(processed_file.chunks):
+            cursor.execute("""
+                INSERT INTO file_chunks (file_id, chunk_index, content, char_count)
+                VALUES (?, ?, ?, ?)
+            """, (processed_file.id, i, chunk, len(chunk)))
+        
+        # Usage-Event loggen
+        log_file_usage(processed_file.id, processed_file.username, "upload", cursor)
+        
+        conn.commit()
+        logger.info(f"[FILES] File saved to database: {processed_file.id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"[FILES] Database save error: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def get_user_files(username: str, thread_id: Optional[str] = None) -> List[Dict]:
+    """Holt Dateien eines Users"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        if thread_id:
+            cursor.execute("""
+                SELECT id, original_name, file_type, file_size, upload_date, 
+                       summary, chunks_count, metadata
+                FROM uploaded_files 
+                WHERE username = ? AND thread_id = ?
+                ORDER BY upload_date DESC
+            """, (username, thread_id))
+        else:
+            cursor.execute("""
+                SELECT id, original_name, file_type, file_size, upload_date, 
+                       summary, chunks_count, metadata
+                FROM uploaded_files 
+                WHERE username = ?
+                ORDER BY upload_date DESC
+            """, (username,))
+        
+        rows = cursor.fetchall()
+        
+        files = []
+        for row in rows:
+            try:
+                metadata = json.loads(row[7]) if row[7] else {}
+            except:
+                metadata = {}
+            
+            files.append({
+                'id': row[0],
+                'original_name': row[1],
+                'file_type': row[2],
+                'file_size': row[3],
+                'upload_date': row[4],
+                'summary': row[5],
+                'chunks_count': row[6],
+                'metadata': metadata
+            })
+        
+        return files
+        
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+def get_file_by_id(file_id: str, username: str) -> Optional[ProcessedFile]:
+    """Holt Datei-Details mit Berechtigung-Check"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT id, username, thread_id, original_name, file_type, file_size,
+                   upload_date, text_content, summary, metadata, chunks_count
+            FROM uploaded_files 
+            WHERE id = ? AND username = ?
+        """, (file_id, username))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        # Chunks laden
+        cursor.execute("""
+            SELECT content FROM file_chunks 
+            WHERE file_id = ? 
+            ORDER BY chunk_index
+        """, (file_id,))
+        
+        chunk_rows = cursor.fetchall()
+        chunks = [chunk_row[0] for chunk_row in chunk_rows]
+        
+        # Metadata parsen
+        try:
+            metadata = json.loads(row[9]) if row[9] else {}
+        except:
+            metadata = {}
+        
+        # ProcessedFile rekonstruieren
+        processed_file = ProcessedFile(
+            id=row[0],
+            username=row[1],
+            thread_id=row[2],
+            original_name=row[3],
+            file_type=FileType(row[4]),
+            file_size=row[5],
+            upload_date=datetime.fromisoformat(row[6]) if row[6] else datetime.now(),
+            text_content=row[7] or "",
+            chunks=chunks,
+            metadata=metadata
+        )
+        
+        return processed_file
+        
+    except Exception as e:
+        logger.error(f"[FILES] Error getting file {file_id}: {e}")
+        return None
+    finally:
+        conn.close()
+
+def delete_file(file_id: str, username: str) -> bool:
+    """Löscht Datei mit Berechtigung-Check"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Berechtigung prüfen
+        cursor.execute("SELECT id FROM uploaded_files WHERE id = ? AND username = ?", 
+                      (file_id, username))
+        if not cursor.fetchone():
+            return False
+        
+        # Chunks löschen
+        cursor.execute("DELETE FROM file_chunks WHERE file_id = ?", (file_id,))
+        
+        # Usage-Logs löschen
+        cursor.execute("DELETE FROM file_usage WHERE file_id = ?", (file_id,))
+        
+        # Haupteintrag löschen
+        cursor.execute("DELETE FROM uploaded_files WHERE id = ?", (file_id,))
+        
+        # Physische Datei löschen
+        file_path = get_file_path(file_id)
+        if file_path.exists():
+            file_path.unlink()
+        
+        conn.commit()
+        logger.info(f"[FILES] File deleted: {file_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"[FILES] Error deleting file {file_id}: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def log_file_usage(file_id: str, username: str, action: str, cursor=None):
+    """Loggt File-Usage"""
+    close_conn = False
+    if cursor is None:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        close_conn = True
+    
+    try:
+        cursor.execute("""
+            INSERT INTO file_usage (file_id, username, action)
+            VALUES (?, ?, ?)
+        """, (file_id, username, action))
+        
+        if close_conn:
+            conn.commit()
+            
+    except Exception as e:
+        logger.error(f"[FILES] Usage logging error: {e}")
+    finally:
+        if close_conn:
+            conn.close()
+
+# ──────────────────────────────
+# File Search and Context Integration
+# ──────────────────────────────
+
+def search_in_files(username: str, query: str, file_id: Optional[str] = None, 
+                   limit: int = 10) -> List[Dict]:
+    """Durchsucht Dateiinhalte"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        if file_id:
+            # Suche in spezifischer Datei
+            cursor.execute("""
+                SELECT fc.file_id, fc.content, fc.chunk_index,
+                       uf.original_name, uf.file_type, uf.thread_id
+                FROM file_chunks fc
+                JOIN uploaded_files uf ON fc.file_id = uf.id
+                WHERE fc.content LIKE ? AND uf.id = ? AND uf.username = ?
+                ORDER BY fc.chunk_index
+                LIMIT ?
+            """, (f"%{query}%", file_id, username, limit))
+        else:
+            # Suche in allen Dateien
+            cursor.execute("""
+                SELECT fc.file_id, fc.content, fc.chunk_index,
+                       uf.original_name, uf.file_type, uf.thread_id
+                FROM file_chunks fc
+                JOIN uploaded_files uf ON fc.file_id = uf.id
+                WHERE fc.content LIKE ? AND uf.username = ?
+                ORDER BY uf.upload_date DESC, fc.chunk_index
+                LIMIT ?
+            """, (f"%{query}%", username, limit))
+        
+        rows = cursor.fetchall()
+        
+        results = []
+        for row in rows:
+            # Highlight Search-Term
+            highlighted_content = highlight_search_term(row[1], query, max_length=300)
+            
+            results.append({
+                'file_id': row[0],
+                'content': row[1],
+                'highlighted_content': highlighted_content,
+                'chunk_index': row[2],
+                'file_name': row[3],
+                'file_type': row[4],
+                'thread_id': row[5]
+            })
+        
+        return results
+        
+    except sqlite3.OperationalError:
+        return []
+    except Exception as e:
+        logger.error(f"[FILES] File search error: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_file_context_for_chat(username: str, thread_id: str) -> List[Dict]:
+    """Holt Dateien-Kontext für Chat"""
+    files = get_user_files(username, thread_id)
+    
+    context_files = []
+    for file in files:
+        if file['chunks_count'] > 0:  # Nur Dateien mit Text-Content
+            context_files.append({
+                'id': file['id'],
+                'name': file['original_name'],
+                'type': file['file_type'],
+                'summary': file['summary'][:200] + "..." if len(file['summary']) > 200 else file['summary'],
+                'chunks_count': file['chunks_count']
+            })
+    
+    return context_files
+
+def get_relevant_file_chunks(username: str, query: str, thread_id: Optional[str] = None, 
+                           max_chunks: int = 3) -> str:
+    """Holt relevante File-Chunks für AI-Context"""
+    search_results = search_in_files(username, query, limit=max_chunks * 2)
+    
+    if not search_results:
+        return ""
+    
+    # Thread-Filter falls gesetzt
+    if thread_id:
+        search_results = [r for r in search_results if r['thread_id'] == thread_id]
+    
+    # Beste Ergebnisse auswählen
+    relevant_chunks = []
+    seen_files = set()
+    
+    for result in search_results[:max_chunks]:
+        if result['file_id'] not in seen_files:
+            relevant_chunks.append(f"[Aus {result['file_name']}]: {result['content'][:500]}...")
+            seen_files.add(result['file_id'])
+    
+    if relevant_chunks:
+        return "\n\n--- Relevante Dokumente ---\n" + "\n\n".join(relevant_chunks) + "\n--- Ende Dokumente ---\n"
+    
+    return ""
+
+# ──────────────────────────────
+# File Statistics and Analytics
+# ──────────────────────────────
+
+def get_user_file_stats(username: str) -> Dict:
+    """Holt File-Statistiken für User"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Grundstatistiken
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_files,
+                SUM(file_size) as total_size,
+                SUM(chunks_count) as total_chunks,
+                AVG(file_size) as avg_file_size
+            FROM uploaded_files 
+            WHERE username = ?
+        """, (username,))
+        
+        stats = cursor.fetchone()
+        
+        # Dateityp-Verteilung
+        cursor.execute("""
+            SELECT file_type, COUNT(*) as count, SUM(file_size) as size
+            FROM uploaded_files 
+            WHERE username = ?
+            GROUP BY file_type
+            ORDER BY count DESC
+        """, (username,))
+        
+        type_distribution = cursor.fetchall()
+        
+        # Neueste Uploads
+        cursor.execute("""
+            SELECT original_name, file_type, upload_date, file_size
+            FROM uploaded_files 
+            WHERE username = ?
+            ORDER BY upload_date DESC 
+            LIMIT 5
+        """, (username,))
+        
+        recent_files = cursor.fetchall()
+        
+        # Usage-Statistiken
+        cursor.execute("""
+            SELECT action, COUNT(*) as count
+            FROM file_usage fu
+            JOIN uploaded_files uf ON fu.file_id = uf.id
+            WHERE uf.username = ?
+            GROUP BY action
+        """, (username,))
+        
+        usage_stats = cursor.fetchall()
+        
+        return {
+            'total_files': stats[0] or 0,
+            'total_size_mb': round((stats[1] or 0) / (1024 * 1024), 2),
+            'total_chunks': stats[2] or 0,
+            'avg_file_size_mb': round((stats[3] or 0) / (1024 * 1024), 2),
+            'type_distribution': [
+                {
+                    'type': row[0],
+                    'count': row[1],
+                    'size_mb': round(row[2] / (1024 * 1024), 2)
+                }
+                for row in type_distribution
+            ],
+            'recent_files': [
+                {
+                    'name': row[0],
+                    'type': row[1],
+                    'date': row[2],
+                    'size_mb': round(row[3] / (1024 * 1024), 2)
+                }
+                for row in recent_files
+            ],
+            'usage_stats': dict(usage_stats)
+        }
+        
+    except sqlite3.OperationalError:
+        return {
+            'total_files': 0,
+            'total_size_mb': 0,
+            'total_chunks': 0,
+            'avg_file_size_mb': 0,
+            'type_distribution': [],
+            'recent_files': [],
+            'usage_stats': {}
+        }
+    finally:
+        conn.close()
+
+def get_global_file_stats() -> Dict:
+    """Globale File-Statistiken für Admin"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        # Gesamtstatistiken
+        cursor.execute("""
+            SELECT 
+                COUNT(*) as total_files,
+                COUNT(DISTINCT username) as unique_users,
+                SUM(file_size) as total_size,
+                AVG(file_size) as avg_file_size
+            FROM uploaded_files
+        """)
+        
+        global_stats = cursor.fetchone()
+        
+        # Top File-Typen
+        cursor.execute("""
+            SELECT file_type, COUNT(*) as count, SUM(file_size) as total_size
+            FROM uploaded_files
+            GROUP BY file_type
+            ORDER BY count DESC
+        """)
+        
+        file_types = cursor.fetchall()
+        
+        # Upload-Aktivität (letzte 30 Tage)
+        cursor.execute("""
+            SELECT DATE(upload_date) as date, COUNT(*) as uploads
+            FROM uploaded_files 
+            WHERE upload_date >= datetime('now', '-30 days')
+            GROUP BY DATE(upload_date)
+            ORDER BY date DESC
+        """)
+        
+        daily_uploads = cursor.fetchall()
+        
+        # Größte Files
+        cursor.execute("""
+            SELECT original_name, username, file_size, upload_date
+            FROM uploaded_files
+            ORDER BY file_size DESC
+            LIMIT 10
+        """)
+        
+        largest_files = cursor.fetchall()
+        
+        return {
+            'total_files': global_stats[0] or 0,
+            'unique_users': global_stats[1] or 0,
+            'total_size_gb': round((global_stats[2] or 0) / (1024 * 1024 * 1024), 2),
+            'avg_file_size_mb': round((global_stats[3] or 0) / (1024 * 1024), 2),
+            'file_types': [
+                {
+                    'type': row[0],
+                    'count': row[1],
+                    'size_gb': round(row[2] / (1024 * 1024 * 1024), 2)
+                }
+                for row in file_types
+            ],
+            'daily_uploads': [
+                {'date': row[0], 'count': row[1]}
+                for row in daily_uploads
+            ],
+            'largest_files': [
+                {
+                    'name': row[0],
+                    'username': row[1],
+                    'size_mb': round(row[2] / (1024 * 1024), 2),
+                    'date': row[3]
+                }
+                for row in largest_files
+            ]
+        }
+        
+    except sqlite3.OperationalError:
+        return {
+            'total_files': 0,
+            'unique_users': 0,
+            'total_size_gb': 0,
+            'avg_file_size_mb': 0,
+            'file_types': [],
+            'daily_uploads': [],
+            'largest_files': []
+        }
+    finally:
+        conn.close()
+
+# ──────────────────────────────
+# Enhanced Chat Integration
+# ──────────────────────────────
+
+async def get_ai_response_with_files(current_message: str, chat_history: list, 
+                                   username: str, thread_id: str, persona: str = "standard",
+                                   model_override: str = None, include_files: bool = True) -> Dict:
+    """
+    Erweiterte AI-Response mit File-Context
+    """
+    # File-Context hinzufügen falls gewünscht
+    enhanced_message = current_message
+    
+    if include_files:
+        # Relevante File-Chunks basierend auf User-Message holen
+        file_context = get_relevant_file_chunks(username, current_message, thread_id, max_chunks=2)
+        
+        if file_context:
+            enhanced_message = f"{current_message}\n{file_context}"
+    
+    # Normale AI-Response mit enhanced message
+    return await get_ai_response_with_model(
+        current_message=enhanced_message,
+        chat_history=chat_history,
+        username=username,
+        thread_id=thread_id,
+        persona=persona,
+        model_override=model_override
+    )
+
+# ──────────────────────────────
+# Background Tasks für File System
+# ──────────────────────────────
+
+async def cleanup_orphaned_files():
+    """Bereinigt verwaiste Dateien"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Dateien ohne DB-Eintrag finden
+        upload_path = ensure_upload_directory()
+        physical_files = set(f.stem for f in upload_path.glob("*.dat"))
+        
+        cursor.execute("SELECT id FROM uploaded_files")
+        db_files = set(row[0] for row in cursor.fetchall())
+        
+        orphaned_files = physical_files - db_files
+        
+        # Verwaiste Dateien löschen
+        deleted_count = 0
+        for file_id in orphaned_files:
+            file_path = get_file_path(file_id)
+            if file_path.exists():
+                file_path.unlink()
+                deleted_count += 1
+        
+        # Verwaiste DB-Einträge finden
+        missing_files = db_files - physical_files
+        
+        # Verwaiste DB-Einträge löschen
+        for file_id in missing_files:
+            cursor.execute("DELETE FROM file_chunks WHERE file_id = ?", (file_id,))
+            cursor.execute("DELETE FROM file_usage WHERE file_id = ?", (file_id,))
+            cursor.execute("DELETE FROM uploaded_files WHERE id = ?", (file_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            'deleted_orphaned_files': deleted_count,
+            'deleted_orphaned_db_entries': len(missing_files),
+            'cleanup_date': datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"File cleanup error: {e}")
+        raise
+
+async def update_file_statistics():
+    """Aktualisiert File-Statistiken"""
+    try:
+        global_stats = get_global_file_stats()
+        
+        # Speicher-Warnungen
+        warnings = []
+        if global_stats['total_size_gb'] > 10:
+            warnings.append(f"Hoher Speicherverbrauch: {global_stats['total_size_gb']} GB")
+        
+        if global_stats['total_files'] > 10000:
+            warnings.append(f"Viele Dateien: {global_stats['total_files']}")
+        
+        return {
+            'total_files': global_stats['total_files'],
+            'total_size_gb': global_stats['total_size_gb'],
+            'unique_users': global_stats['unique_users'],
+            'warnings': warnings,
+            'update_time': datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"File statistics update error: {e}")
+        raise
+
+def setup_file_background_tasks():
+    """Registriert File-Processing Background-Tasks"""
+    task_manager.register_task_function(
+        "cleanup_orphaned_files",
+        cleanup_orphaned_files,
+        "Bereinigt verwaiste Dateien ohne DB-Referenz"
+    )
+    
+    task_manager.register_task_function(
+        "update_file_statistics",
+        update_file_statistics,
+        "Aktualisiert File-System-Statistiken"
+    )
+    
+    # Cleanup täglich
+    task_manager.schedule_recurring_task(
+        "cleanup_files_scheduled",
+        cleanup_orphaned_files,
+        interval_seconds=86400,  # Täglich
+        run_immediately=False
+    )
+    
+    # Statistiken alle 6 Stunden
+    task_manager.schedule_recurring_task(
+        "file_stats_scheduled",
+        update_file_statistics,
+        interval_seconds=21600,  # 6 Stunden
+        run_immediately=True
+    )
+
+# ──────────────────────────────
+# Cache Functions für Files
+# ──────────────────────────────
+
+@cache_result("user_files", ttl=300)
+def get_user_files_cached(username: str, thread_id: str = None):
+    """Cached Version von get_user_files"""
+    return get_user_files(username, thread_id)
+
+@cache_result("file_stats", ttl=600)
+def get_user_file_stats_cached(username: str):
+    """Cached Version von get_user_file_stats"""
+    return get_user_file_stats(username)
+
+def invalidate_file_cache(username: str):
+    """File-bezogene Cache-Einträge löschen"""
+    keys_to_delete = [
+        f"user_files:{username}",
+        f"user_files:{username}:None",
+        f"file_stats:{username}"
+    ]
+    
+    for key in keys_to_delete:
+        app_cache.delete(key)
+
 # Rate-Limiting Funktionen
 def load_rate_limits():
     """Lädt Rate-Limit-Daten"""
@@ -3263,13 +4429,209 @@ async def chat_page_with_threading(request: Request):
     })
 
 # ──────────────────────────────
-# Multi-AI Models Routes
+# File Processing Routes
 # ──────────────────────────────
 
-# Erweiterte Chat-Route mit Multi-Model-Support
+from fastapi import UploadFile, File
+from fastapi.responses import FileResponse
+
+@app.get("/files", response_class=HTMLResponse)
+async def files_page(request: Request):
+    """File-Management-Seite"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    thread_id = request.query_params.get('thread')
+    
+    # User-Dateien holen
+    user_files = get_user_files_cached(username, thread_id)
+    
+    # File-Statistiken
+    file_stats = get_user_file_stats_cached(username)
+    
+    # Thread-Info falls spezifisch
+    current_thread = None
+    if thread_id:
+        current_thread = get_thread_info(username, thread_id)
+    
+    # Threads für Filter
+    threads = get_user_threads(username)
+    
+    return templates.TemplateResponse("files.html", {
+        "request": request,
+        "username": username,
+        "user_files": user_files,
+        "file_stats": file_stats,
+        "current_thread": current_thread,
+        "threads": threads,
+        "max_file_size_mb": MAX_FILE_SIZE // (1024 * 1024),
+        "max_files_per_user": MAX_FILES_PER_USER
+    })
+
+@app.post("/files/upload")
+async def upload_file(request: Request, 
+                     file: UploadFile = File(...),
+                     thread_id: str = Form(None)):
+    """File-Upload-Endpoint"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    try:
+        # File-Content lesen
+        file_content = await file.read()
+        filename = file.filename or "unbekannt"
+        
+        # Validierung
+        is_valid, error_message = validate_file_upload(file_content, filename, username)
+        if not is_valid:
+            return RedirectResponse(f"/files?error={error_message}", status_code=302)
+        
+        # File verarbeiten
+        processed_file = process_uploaded_file(
+            file_content=file_content,
+            filename=filename,
+            username=username,
+            thread_id=thread_id
+        )
+        
+        # In DB speichern
+        if save_processed_file_to_db(processed_file):
+            # Cache invalidieren
+            invalidate_file_cache(username)
+            
+            # Usage loggen
+            log_file_usage(processed_file.id, username, "upload")
+            
+            logger.info(f"[FILES] File uploaded: {filename} by {username}")
+            return RedirectResponse(f"/files?success=uploaded&file_id={processed_file.id}", status_code=302)
+        else:
+            return RedirectResponse("/files?error=save_failed", status_code=302)
+        
+    except Exception as e:
+        logger.error(f"[FILES] Upload error: {e}")
+        return RedirectResponse(f"/files?error=processing_failed", status_code=302)
+
+@app.get("/files/{file_id}")
+async def view_file(request: Request, file_id: str):
+    """File-Detail-Ansicht"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    # File laden mit Berechtigung-Check
+    processed_file = get_file_by_id(file_id, username)
+    if not processed_file:
+        return RedirectResponse("/files?error=file_not_found", status_code=302)
+    
+    # Usage loggen
+    log_file_usage(file_id, username, "view")
+    
+    return templates.TemplateResponse("file_detail.html", {
+        "request": request,
+        "username": username,
+        "file": processed_file
+    })
+
+@app.post("/files/{file_id}/delete")
+async def delete_file_route(request: Request, file_id: str):
+    """File löschen"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    if delete_file(file_id, username):
+        invalidate_file_cache(username)
+        logger.info(f"[FILES] File deleted: {file_id} by {username}")
+        return RedirectResponse("/files?success=deleted", status_code=302)
+    else:
+        return RedirectResponse("/files?error=delete_failed", status_code=302)
+
+@app.get("/files/{file_id}/download")
+async def download_file(request: Request, file_id: str):
+    """File-Download"""
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    # File-Info laden
+    processed_file = get_file_by_id(file_id, username)
+    if not processed_file:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Physische Datei prüfen
+    file_path = get_file_path(file_id)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Physical file not found")
+    
+    # Usage loggen
+    log_file_usage(file_id, username, "download")
+    
+    return FileResponse(
+        path=file_path,
+        filename=processed_file.original_name,
+        media_type='application/octet-stream'
+    )
+
+@app.get("/api/files/search")
+async def api_search_files(request: Request):
+    """API für File-Suche"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    username = request.session.get("username")
+    query = request.query_params.get('q', '').strip()
+    file_id = request.query_params.get('file_id')
+    limit = min(int(request.query_params.get('limit', 10)), 50)
+    
+    if not query:
+        return {"error": "Suchbegriff fehlt"}
+    
+    # File-Suche
+    results = search_in_files(username, query, file_id, limit)
+    
+    return {
+        "query": query,
+        "total_results": len(results),
+        "results": results
+    }
+
+@app.get("/api/files/context/{thread_id}")
+async def api_files_context(request: Request, thread_id: str):
+    """API für File-Context in Thread"""
+    redirect = require_active_session(request)
+    if redirect:
+        return {"error": "Session expired"}
+    
+    username = request.session.get("username")
+    
+    # File-Context für Thread
+    context_files = get_file_context_for_chat(username, thread_id)
+    
+    return {
+        "thread_id": thread_id,
+        "files": context_files,
+        "total_files": len(context_files)
+    }
+
+# ──────────────────────────────
+# Enhanced Chat Route mit File-Context
+# ──────────────────────────────
+
 @app.post("/chat")
-async def chat_with_multi_models(req: Request):
-    """Erweiterte Chat-Route mit Multi-Model-Support"""
+async def chat_with_files_and_models(req: Request):
+    """Chat mit Multi-AI und File-Context Support"""
     redirect = require_active_session(req)
     if redirect:
         return {"reply": "Session abgelaufen. Bitte neu anmelden.", "redirect": "/"}
@@ -3291,7 +4653,8 @@ async def chat_with_multi_models(req: Request):
     data = await req.json()
     user_message = data.get("message", "")
     thread_id = data.get("thread_id", get_current_thread_id(req))
-    model_override = data.get("model_id")  # Optionale Model-Überschreibung
+    model_override = data.get("model_id")
+    include_files = data.get("include_files", True)  # File-Context aktiviert?
     
     if not user_message.strip():
         return {"reply": "Leere Nachricht."}
@@ -3318,21 +4681,22 @@ async def chat_with_multi_models(req: Request):
         current_persona = "standard"
         save_user_persona_cached(username, current_persona)
     
-    # User-Nachricht speichern (ohne Model-Info)
+    # User-Nachricht speichern
     save_message_to_thread(username, thread_id, "user", user_message)
     
     # Chat-Historie laden
     history = get_thread_history(username, thread_id)
     
     try:
-        # AI-Response mit Multi-Model-Support
-        ai_result = await get_ai_response_with_model(
+        # AI-Response mit File-Context (falls aktiviert)
+        ai_result = await get_ai_response_with_files(
             current_message=user_message,
             chat_history=history,
             username=username,
             thread_id=thread_id,
             persona=current_persona,
-            model_override=model_override
+            model_override=model_override,
+            include_files=include_files
         )
         
         raw_response = ai_result['content']
@@ -3354,6 +4718,17 @@ async def chat_with_multi_models(req: Request):
         # Caches invalidieren
         invalidate_thread_cache(username)
         invalidate_model_cache(username)
+        invalidate_search_on_new_message(username, thread_id)
+        
+        # File-Context-Info für Response
+        file_context_info = None
+        if include_files:
+            context_files = get_file_context_for_chat(username, thread_id)
+            if context_files:
+                file_context_info = {
+                    "files_available": len(context_files),
+                    "files_used": True  # Könnte verfeinert werden
+                }
         
         return {
             "reply": rendered_response,
@@ -3367,6 +4742,7 @@ async def chat_with_multi_models(req: Request):
                 "cost": model_info['cost'],
                 "is_fallback": model_info.get('is_fallback', False)
             },
+            "file_context": file_context_info,
             "remaining_messages": {
                 "hour": rate_limit_result["remaining_hour"],
                 "day": rate_limit_result["remaining_day"]
@@ -3374,127 +4750,130 @@ async def chat_with_multi_models(req: Request):
         }
         
     except Exception as e:
-        logger.error(f"Multi-model chat error for {username}: {str(e)}")
+        logger.error(f"Enhanced chat error for {username}: {str(e)}")
         return {"reply": "Ein Fehler ist aufgetreten. Versuche es erneut."}
 
 # ──────────────────────────────
-# Model Selection Routes
+# Admin File Management
 # ──────────────────────────────
 
-@app.get("/models", response_class=HTMLResponse)
-async def model_selection_page(request: Request):
-    """Model-Auswahl-Seite"""
+@app.get("/admin/files", response_class=HTMLResponse)
+async def admin_files_page(request: Request):
+    """Admin-Seite für File-Management"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
     redirect = require_active_session(request)
     if redirect:
         return redirect
     
-    username = request.session.get("username")
+    # Globale File-Statistiken
+    global_stats = get_global_file_stats()
     
-    # Verfügbare Modelle für User
-    available_models = get_available_models_for_user_cached(username)
-    current_model = get_user_preferred_model_cached(username)
-    
-    # User-Statistiken
-    user_stats = get_user_model_stats(username)
-    
-    # Provider-Status
-    provider_status = {}
-    for provider in ModelProvider:
-        provider_obj = model_manager.providers.get(provider)
-        provider_status[provider.value] = {
-            'available': provider_obj.is_available if provider_obj else False,
-            'name': provider.value.title()
-        }
-    
-    return templates.TemplateResponse("models.html", {
+    return templates.TemplateResponse("admin_files.html", {
         "request": request,
-        "username": username,
-        "available_models": available_models,
-        "current_model": current_model,
-        "user_stats": user_stats,
-        "provider_status": provider_status,
-        "subscription_tiers": SUBSCRIPTION_TIERS
+        "global_stats": global_stats,
+        "max_file_size_mb": MAX_FILE_SIZE // (1024 * 1024),
+        "max_files_per_user": MAX_FILES_PER_USER
     })
 
-@app.post("/models/select")
-async def select_model(request: Request, model_id: str = Form(...)):
-    """Model für User auswählen"""
-    redirect = require_active_session(request)
-    if redirect:
-        return redirect
+@app.get("/admin/files/{username}")
+async def admin_user_files(request: Request, username: str):
+    """Admin-Ansicht für User-Files"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
     
-    username = request.session.get("username")
-    available_models = get_available_models_for_user_cached(username)
+    user_files = get_user_files(username)
+    user_stats = get_user_file_stats(username)
     
-    if model_id in available_models:
-        set_user_preferred_model(username, model_id)
-        invalidate_model_cache(username)
-        
-        model_name = available_models[model_id].display_name
-        logger.info(f"[MODELS] {username} selected model: {model_name}")
-        
-        return RedirectResponse("/models?success=model_selected", status_code=302)
-    else:
-        return RedirectResponse("/models?error=invalid_model", status_code=302)
+    return templates.TemplateResponse("admin_user_files.html", {
+        "request": request,
+        "target_username": username,
+        "user_files": user_files,
+        "user_stats": user_stats
+    })
 
-@app.post("/threads/{thread_id}/model")
-async def set_thread_model(request: Request, thread_id: str, model_id: str = Form(...)):
-    """Setzt Model für einen spezifischen Thread"""
-    redirect = require_active_session(request)
-    if redirect:
-        return redirect
+@app.post("/admin/files/{file_id}/delete")
+async def admin_delete_file(request: Request, file_id: str):
+    """Admin löscht User-File"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
     
-    username = request.session.get("username")
-    available_models = get_available_models_for_user_cached(username)
+    # File-Info holen (ohne User-Berechtigung)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    if model_id in available_models or model_id == "default":
-        if model_id == "default":
-            model_id = None  # NULL = verwende User-Default
+    try:
+        cursor.execute("SELECT username FROM uploaded_files WHERE id = ?", (file_id,))
+        row = cursor.fetchone()
         
-        set_thread_preferred_model(username, thread_id, model_id)
+        if not row:
+            return {"success": False, "message": "File nicht gefunden"}
         
-        return {"success": True, "message": "Thread-Model aktualisiert"}
-    else:
-        return {"success": False, "message": "Model nicht verfügbar"}
+        file_username = row[0]
+        
+        # File löschen
+        if delete_file(file_id, file_username):
+            logger.info(f"[ADMIN] File deleted by admin: {file_id}")
+            return {"success": True, "message": "File gelöscht"}
+        else:
+            return {"success": False, "message": "Löschung fehlgeschlagen"}
+            
+    finally:
+        conn.close()
 
-@app.get("/api/models/available")
-async def api_get_available_models(request: Request):
-    """API für verfügbare Modelle"""
+@app.post("/admin/files/cleanup")
+async def admin_cleanup_files(request: Request):
+    """Admin startet File-Cleanup"""
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    # Cleanup als Background-Task starten
+    task_id = await task_manager.run_task(
+        "manual_file_cleanup",
+        cleanup_orphaned_files
+    )
+    
+    logger.info(f"[ADMIN] Manual file cleanup started (Task ID: {task_id})")
+    return RedirectResponse("/admin/files?cleanup_started=1", status_code=302)
+
+# ──────────────────────────────
+# File-Integration in Chat-Template
+# ──────────────────────────────
+
+@app.get("/api/chat/files/{thread_id}")
+async def api_chat_files_info(request: Request, thread_id: str):
+    """File-Info für Chat-Interface"""
     redirect = require_active_session(request)
     if redirect:
         return {"error": "Session expired"}
     
     username = request.session.get("username")
-    available_models = get_available_models_for_user_cached(username)
     
-    models_data = {}
-    for model_id, model in available_models.items():
-        models_data[model_id] = {
-            "display_name": model.display_name,
-            "description": model.description,
-            "provider": model.provider.value,
-            "capabilities": model.capabilities,
-            "cost_per_1k_tokens": model.cost_per_1k_tokens,
-            "personality": model.personality,
-            "subscription_tier": model.subscription_tier
-        }
+    # Dateien im Thread
+    thread_files = get_user_files(username, thread_id)
+    
+    # Kompakte Info für Chat-UI
+    files_info = []
+    for file in thread_files[:10]:  # Max 10 für UI
+        files_info.append({
+            "id": file['id'],
+            "name": file['original_name'],
+            "type": file['file_type'],
+            "size_mb": round(file['file_size'] / (1024 * 1024), 2),
+            "summary": file['summary'][:100] + "..." if len(file['summary']) > 100 else file['summary']
+        })
     
     return {
-        "models": models_data,
-        "current_model": get_user_preferred_model_cached(username)
+        "thread_id": thread_id,
+        "files": files_info,
+        "total_files": len(thread_files),
+        "has_files": len(thread_files) > 0
     }
-
-@app.get("/api/models/stats")
-async def api_model_stats(request: Request):
-    """API für Model-Statistiken"""
-    redirect = require_active_session(request)
-    if redirect:
-        return {"error": "Session expired"}
-    
-    username = request.session.get("username")
-    stats = get_user_model_stats(username)
-    
-    return stats
 
 # ──────────────────────────────
 # Admin Model Management
@@ -5033,12 +6412,11 @@ async def cache_cleanup_background():
             await asyncio.sleep(300)
 
 # ──────────────────────────────
-# Startup / Shutdown
+# Startup / Shutdown (mit Files-Upgrade & File-Tasks)
 # ──────────────────────────────
 
 def _ensure_runtime_files():
     """Erstellt fehlende Dateien/Ordner und prüft Basisvoraussetzungen."""
-    # Rate-Limit-Datei anlegen, wenn nicht vorhanden
     try:
         if RATE_LIMIT_FILE and not os.path.exists(RATE_LIMIT_FILE):
             with open(RATE_LIMIT_FILE, "w", encoding="utf-8") as f:
@@ -5046,16 +6424,6 @@ def _ensure_runtime_files():
             logger.info(f"[STARTUP] Created {RATE_LIMIT_FILE}")
     except Exception as e:
         logger.error(f"[STARTUP] Could not prepare {RATE_LIMIT_FILE}: {e}")
-
-    # Datenbank-Datei prüfen (init_db/Upgrades übernehmen die Schema-Seite)
-    try:
-        if DB_PATH:
-            # Datei wird von sqlite bei erster Verbindung erzeugt;
-            # wir lassen init_db() die Tabellen anlegen.
-            pass
-    except Exception as e:
-        logger.error(f"[STARTUP] DB pre-check failed: {e}")
-
 
 def _maybe_print_route_map():
     """Optional: Routenübersicht ausgeben (aktivieren mit env PRINT_ROUTE_MAP=1)."""
@@ -5075,47 +6443,66 @@ def _maybe_print_route_map():
     except Exception as e:
         logger.error(f"[STARTUP] Route-map print failed: {e}")
 
-
 @app.on_event("startup")
 async def startup():
     """App-Startup: DB initialisieren, Upgrades, Caches, Background-Tasks."""
     try:
         logger.info("[STARTUP] Initializing application…")
 
-        # 1) Dateien/Umgebung sicherstellen
+        # 1) Dateien/Umgebung vorbereiten
         _ensure_runtime_files()
 
-        # 2) DB initialisieren & upgraden (Reihenfolge beachten)
-        init_db()  # Tabellen & Default-Admin etc.
-        upgrade_database_for_threading()   # thread_id, chat_threads, defaults
-        upgrade_database_for_models()      # preferred_model, model_usage-Felder
+        # 2) DB initialisieren & Upgrades (Reihenfolge!):
+        #    - Basistabellen
+        #    - Threading (chat_threads / thread_id)
+        #    - Multi-Model (preferred_model, model_usage-Spalten)
+        #    - Files (DEIN neues Upgrade)
+        init_db()
+        upgrade_database_for_threading()
+        upgrade_database_for_models()
 
-        # 3) Caches optional vorwärmen / leeren (hier: nur sauberer Start)
+        # Files-Upgrade nur ausführen, wenn es existiert
+        if "upgrade_database_for_files" in globals() and callable(globals()["upgrade_database_for_files"]):
+            try:
+                upgrade_database_for_files()
+                logger.info("[FILES] Database upgraded for files ✅")
+            except Exception as e:
+                logger.exception(f"[FILES] Database upgrade failed: {e}")
+        else:
+            logger.info("[FILES] upgrade_database_for_files() not defined — skipped")
+
+        # 3) Cache einmal leeren (sauberer Start)
         if hasattr(app_cache, "clear"):
             app_cache.clear()
 
-        # 4) Background-Tasks registrieren & Scheduler starten
-        setup_background_tasks()
+        # 4) Background-Tasks registrieren:
+        setup_background_tasks()  # dein allgemeiner Task-Manager
 
-        # 5) Optional: Routenübersicht zur Kontrolle
+        # File-Tasks nur starten, wenn Funktion existiert
+        if "setup_file_background_tasks" in globals() and callable(globals()["setup_file_background_tasks"]):
+            try:
+                setup_file_background_tasks()
+                logger.info("[FILES] File background tasks set up ✅")
+            except Exception as e:
+                logger.exception(f"[FILES] setup_file_background_tasks failed: {e}")
+        else:
+            logger.info("[FILES] setup_file_background_tasks() not defined — skipped")
+
+        # 5) Optional: Routenliste
         _maybe_print_route_map()
 
-        logger.info("[STARTUP] KI-Chat mit Multi-AI-Models gestartet ✅")
+        logger.info("[STARTUP] Application started ✅")
     except Exception as e:
-        # Startup-Fehler deutlich loggen und erneut werfen, damit Render nicht im Halbschaden läuft
         logger.exception(f"[STARTUP] Failed to start application: {e}")
         raise
-
 
 @app.on_event("shutdown")
 async def shutdown():
     """Sauberes Herunterfahren (Scheduler stoppen, Ressourcen freigeben)."""
     try:
-        # Task-Scheduler anhalten (falls verfügbar)
+        # Allgemeinen Scheduler stoppen
         if hasattr(task_manager, "scheduler_running"):
             task_manager.scheduler_running = False
-
-        # Laufende Tasks abbrechen (optional)
         if hasattr(task_manager, "running_tasks"):
             for task_id, a_task in list(task_manager.running_tasks.items()):
                 try:
@@ -5123,6 +6510,22 @@ async def shutdown():
                 except Exception:
                     pass
 
+        # Falls du einen separaten File-Task-Manager verwendest (z. B. file_task_manager)
+        if "file_task_manager" in globals():
+            ftm = globals().get("file_task_manager")
+            try:
+                if hasattr(ftm, "scheduler_running"):
+                    ftm.scheduler_running = False
+                if hasattr(ftm, "running_tasks"):
+                    for task_id, a_task in list(ftm.running_tasks.items()):
+                        try:
+                            a_task.cancel()
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.error(f"[SHUTDOWN] Error stopping file_task_manager: {e}")
+
         logger.info("[SHUTDOWN] Application shutdown complete ✅")
     except Exception as e:
         logger.error(f"[SHUTDOWN] Error during shutdown: {e}")
+

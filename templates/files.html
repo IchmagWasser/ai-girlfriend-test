@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Datei-Management</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .header h1 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .nav-links a {
+            color: #667eea;
+            text-decoration: none;
+            margin-right: 20px;
+            padding: 8px 15px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .upload-section {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .upload-area {
+            border: 2px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .upload-area:hover {
+            border-color: #5a6fd8;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .upload-area.dragover {
+            border-color: #28a745;
+            background: rgba(40, 167, 69, 0.1);
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .upload-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            margin-top: 15px;
+        }
+
+        .upload-btn:hover {
+            background: #5a6fd8;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .files-section {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .files-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #667eea;
+        }
+
+        .thread-filter {
+            padding: 8px 15px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: white;
+        }
+
+        .files-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .file-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+            background: white;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .file-card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .file-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+        }
+
+        .file-icon {
+            font-size: 2em;
+            margin-right: 10px;
+        }
+
+        .file-type-pdf {
+            color: #dc3545;
+        }
+
+        .file-type-docx {
+            color: #007bff;
+        }
+
+        .file-type-txt {
+            color: #28a745;
+        }
+
+        .file-type-image {
+            color: #ffc107;
+        }
+
+        .file-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+            word-break: break-word;
+        }
+
+        .file-meta {
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .file-summary {
+            font-size: 0.9em;
+            color: #555;
+            line-height: 1.4;
+            margin-bottom: 15px;
+            max-height: 60px;
+            overflow: hidden;
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 15px;
+        }
+
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85em;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5a6fd8;
+        }
+
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #218838;
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e9ecef;
+            border-radius: 3px;
+            margin: 10px 0;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #28a745;
+            border-radius: 3px;
+            transition: width 0.3s ease;
+        }
+
+        .upload-progress {
+            display: none;
+            margin-top: 15px;
+        }
+
+        .file-search {
+            margin-bottom: 20px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        .search-input:focus {
+            border-color: #667eea;
+            outline: none;
+        }
+
+        @media (max-width: 768px) {
+            .files-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .files-header {
+                flex-direction: column;
+                gap: 15px;
+                align-items: stretch;
+            }
+
+            .file-actions {
+                flex-wrap: wrap;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📁 Datei-Management</h1>
+            <div class="nav-links">
+                <a href="/chat">💬 Chat</a>
+                <a href="/search">🔍 Suche</a>
+                <a href="/models">🤖 Modelle</a>
+                <a href="/files">📁 Dateien</a>
+                <a href="/persona">🎭 Persona</a>
+                {% if request.session.get("username") == "admin" %}
+                <a href="/admin">👑 Admin</a>
+                {% endif %}
+                <a href="/logout">🚪 Logout</a>
+            </div>
+        </div>
+
+        <!-- Status Messages -->
+        {% if request.query_params.get('success') == 'uploaded' %}
+        <div class="alert alert-success">
+            ✅ Datei erfolgreich hochgeladen und verarbeitet!
+        </div>
+        {% endif %}
+
+        {% if request.query_params.get('success') == 'deleted' %}
+        <div class="alert alert-success">
+            🗑️ Datei erfolgreich gelöscht!
+        </div>
+        {% endif %}
+
+        {% if request.query_params.get('error') %}
+        <div class="alert alert-error">
+            ❌ Fehler: {{ request.query_params.get('error') }}
+        </div>
+        {% endif %}
+
+        <!-- Thread Info -->
+        {% if current_thread %}
+        <div class="alert alert-info">
+            📂 Dateien für Thread: <strong>{{ current_thread.title }}</strong>
+            <a href="/files" style="margin-left: 15px;">Alle Dateien anzeigen</a>
+        </div>
+        {% endif %}
+
+        <!-- File Statistics -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-number">{{ file_stats.total_files }}</div>
+                <div class="stat-label">Dateien</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ file_stats.total_size_mb }}</div>
+                <div class="stat-label">MB verwendet</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ file_stats.total_chunks }}</div>
+                <div class="stat-label">Text-Abschnitte</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ max_files_per_user - file_stats.total_files }}</div>
+                <div class="stat-label">Verfügbare Slots</div>
+            </div>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="upload-section">
+            <h2>📤 Datei hochladen</h2>
+            <p>Unterstützte Formate: PDF, DOCX, TXT, Bilder (JPG, PNG, etc.) - Max. {{ max_file_size_mb }} MB</p>
+            
+            <form id="uploadForm" method="post" action="/files/upload" enctype="multipart/form-data">
+                {% if current_thread %}
+                <input type="hidden" name="thread_id" value="{{ current_thread.id }}">
+                {% endif %}
+                
+                <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+                    <div class="upload-icon">📎</div>
+                    <h3>Datei hier ablegen oder klicken zum Auswählen</h3>
+                    <p>PDF, DOCX, TXT und Bilder werden automatisch analysiert</p>
+                </div>
+                
+                <input type="file" id="fileInput" name="file" class="file-input" accept=".pdf,.docx,.txt,.jpg,.jpeg,.png,.gif,.bmp,.tiff">
+                
+                <div class="upload-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 0%"></div>
+                    </div>
+                    <p>Datei wird hochgeladen und verarbeitet...</p>
+                </div>
+            </form>
+        </div>
+
+        <!-- Files Section -->
+        <div class="files-section">
+            <div class="files-header">
+                <h2>📚 Deine Dateien</h2>
+                <div>
+                    <select class="thread-filter" onchange="filterByThread(this.value)">
+                        <option value="">Alle Threads</option>
+                        {% for thread in threads %}
+                        <option value="{{ thread.id }}" {% if current_thread and current_thread.id == thread.id %}selected{% endif %}>
+                            {{ thread.title }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <!-- File Search -->
+            <div class="file-search">
+                <input type="text" class="search-input" id="fileSearchInput" placeholder="In Dateien suchen...">
+            </div>
+
+            <!-- Files Grid -->
+            {% if user_files %}
+            <div class="files-grid" id="filesGrid">
+                {% for file in user_files %}
+                <div class="file-card" data-file-name="{{ file.original_name|lower }}" data-file-type="{{ file.file_type }}">
+                    <div class="file-header">
+                        <div style="display: flex; align-items: center;">
+                            <div class="file-icon file-type-{{ file.file_type }}">
+                                {% if file.file_type == 'pdf' %}📄
+                                {% elif file.file_type == 'docx' %}📝
+                                {% elif file.file_type == 'txt' %}📃
+                                {% elif file.file_type == 'image' %}🖼️
+                                {% else %}📄{% endif %}
+                            </div>
+                            <div>
+                                <div class="file-name">{{ file.original_name }}</div>
+                                <div class="file-meta">
+                                    {{ (file.file_size / (1024*1024))|round(2) }} MB • 
+                                    {{ file.chunks_count }} Abschnitte • 
+                                    {{ file.upload_date[:10] }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="file-summary">
+                        {{ file.summary[:150] }}{% if file.summary|length > 150 %}...{% endif %}
+                    </div>
+
+                    <div class="file-actions">
+                        <a href="/files/{{ file.id }}" class="btn btn-primary">👁️ Ansehen</a>
+                        <a href="/files/{{ file.id }}/download" class="btn btn-success">💾 Download</a>
+                        <button onclick="searchInFile('{{ file.id }}', '{{ file.original_name }}')" class="btn btn-secondary">🔍 Durchsuchen</button>
+                        <button onclick="deleteFile('{{ file.id }}', '{{ file.original_name }}')" class="btn btn-danger">🗑️ Löschen</button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <h3>Noch keine Dateien hochgeladen</h3>
+                <p>Lade deine erste Datei hoch, um sie mit der KI zu analysieren!</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- File Type Distribution -->
+        {% if file_stats.type_distribution %}
+        <div class="files-section">
+            <h3>📊 Dateityp-Verteilung</h3>
+            <div class="stats-grid">
+                {% for type_stat in file_stats.type_distribution %}
+                <div class="stat-card">
+                    <div class="stat-number">{{ type_stat.count }}</div>
+                    <div class="stat-label">{{ type_stat.type.upper() }} ({{ type_stat.size_mb }} MB)</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        // File Upload Handling
+        const fileInput = document.getElementById('fileInput');
+        const uploadForm = document.getElementById('uploadForm');
+        const uploadArea = document.querySelector('.upload-area');
+        const progressSection = document.querySelector('.upload-progress');
+        const progressFill = document.querySelector('.progress-fill');
+
+        // Drag & Drop
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                fileInput.files = files;
+                handleFileUpload();
+            }
+        });
+
+        // File Selection
+        fileInput.addEventListener('change', handleFileUpload);
+
+        function handleFileUpload() {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            // Validation
+            const maxSize = {{ max_file_size_mb }} * 1024 * 1024;
+            if (file.size > maxSize) {
+                alert(`Datei zu groß! Maximum: {{ max_file_size_mb }} MB`);
+                return;
+            }
+
+            const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'];
+            const imageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/tiff'];
+            
+            if (!allowedTypes.includes(file.type) && !imageTypes.includes(file.type)) {
+                alert('Dateityp nicht unterstützt!');
+                return;
+            }
+
+            // Show progress
+            progressSection.style.display = 'block';
+            progressFill.style.width = '0%';
+
+            // Simulate progress (real progress would need server-sent events)
+            let progress = 0;
+            const interval = setInterval(() => {
+                progress += 10;
+                progressFill.style.width = progress + '%';
+                
+                if (progress >= 90) {
+                    clearInterval(interval);
+                }
+            }, 200);
+
+            // Submit form
+            uploadForm.submit();
+        }
+
+        // File Search
+        const searchInput = document.getElementById('fileSearchInput');
+        const filesGrid = document.getElementById('filesGrid');
+
+        searchInput.addEventListener('input', function() {
+            const query = this.value.toLowerCase();
+            const fileCards = filesGrid.querySelectorAll('.file-card');
+
+            fileCards.forEach(card => {
+                const fileName = card.getAttribute('data-file-name');
+                const isVisible = fileName.includes(query);
+                card.style.display = isVisible ? 'block' : 'none';
+            });
+        });
+
+        // Thread Filter
+        function filterByThread(threadId) {
+            if (threadId) {
+                window.location.href = `/files?thread=${threadId}`;
+            } else {
+                window.location.href = '/files';
+            }
+        }
+
+        // File Actions
+        function deleteFile(fileId, fileName) {
+            if (!confirm(`Datei "${fileName}" wirklich löschen?`)) return;
+
+            fetch(`/files/${fileId}/delete`, { method: 'POST' })
+                .then(response => {
+                    if (response.redirected) {
+                        window.location.href = response.url;
+                    }
+                })
+                .catch(error => {
+                    alert('Fehler beim Löschen: ' + error);
+                });
+        }
+
+        function searchInFile(fileId, fileName) {
+            const query = prompt(`In "${fileName}" suchen:`);
+            if (query) {
+                window.open(`/search?q=${encodeURIComponent(query)}&file=${fileId}`, '_blank');
+            }
+        }
+
+        // Auto-refresh file list every 30 seconds
+        setInterval(() => {
+            // Could implement live updates here
+        }, 30000);
+    </script>
+</body>
+</html>

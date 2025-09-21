@@ -467,6 +467,7 @@
                 <div class="thread-info">
                     {{ current_thread.message_count }} Nachrichten • Thread: {{ current_thread.id }}
                     <span id="current-model-display" style="margin-left: 15px; color: #28a745; font-weight: 500;"></span>
+                    <span id="file-context-info" style="margin-left: 15px; color: #a72894;"></span>
                 </div>
             </div>
             <div class="header-actions">
@@ -474,10 +475,11 @@
                   {% if request.session.get("username") == "admin" %}
                 <a href="/admin" class="btn btn-primary">👑 Admin</a>
                  {% endif %}
-                <button onclick="clearThreadHistory()" class="btn btn-danger">🗑️ Verlauf löschen</button>
+                <button onclick="clearThreadHistory()" class="btn btn-danger">🗑️ Verlauf löschen</button> 
                 <a href="/logout" class="btn btn-secondary">🚪 Logout</a>
                 <a href="/search">🔍 Suche</a>
-                <a href="/models" class="btn btn-secondary">🤖 Modelle</a>  <!-- NEU -->
+                <a href="/models" class="btn btn-secondary">🤖 Modelle</a>  
+                <a href="/files" class="btn btn-secondary">📁 Dateien</a>
             </div>
         </div>
             <div class="quick-search-container" style="padding: 10px 20px; border-bottom: 1px solid rgba(255,255,255,0.2); background: rgba(255, 255, 255, 0.95);">
@@ -864,6 +866,24 @@ async function loadModelInfo() {
 
 // Beim Laden der Seite ausführen
 window.addEventListener('load', loadModelInfo);
+
+// File-Context-Info laden
+async function loadFileContext() {
+    try {
+        const response = await fetch(`/api/chat/files/${currentThreadId}`);
+        const data = await response.json();
+        
+        if (data.has_files) {
+            document.getElementById('file-context-info').textContent = 
+                `📄 ${data.total_files} Dateien verfügbar`;
+        }
+    } catch (error) {
+        console.log('File context load failed:', error);
+    }
+}
+
+// Beim Laden und Thread-Wechsel ausführen
+window.addEventListener('load', loadFileContext);
     </script>
 </body>
 </html>
