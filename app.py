@@ -4305,9 +4305,12 @@ def admin_redirect_guard(request: Request):
 # Routes - Auth
 # ──────────────────────────────
 @app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
+async def service_selection_page(request: Request):
+    """Service-Auswahl Homepage"""
     request.session.clear()
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse("service_selection.html", {
+        "request": request
+    })
 
 @app.post("/login", response_class=HTMLResponse)
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
@@ -4379,6 +4382,17 @@ async def reset_post(request: Request,
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/", status_code=302)
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_with_service(request: Request, service: str = None):
+    """Login mit Service-Parameter"""
+    if service:
+        request.session["selected_service"] = service
+    
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "service": service
+    })
 
 # ──────────────────────────────
 # Routes - Chat
