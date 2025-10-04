@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rezeptvorschläge</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .gastro-container {
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        .gastro-grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 30px;
+            margin-top: 30px;
+        }
+        .gastro-card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+            font-family: inherit;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .btn-primary {
+            background: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+            width: 100%;
+        }
+        .recipe-card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .recipe-card h3 {
+            color: #007bff;
+            margin-bottom: 15px;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            background: #17a2b8;
+            color: white;
+            border-radius: 12px;
+            font-size: 0.85rem;
+        }
+        .recipe-section {
+            margin-top: 20px;
+        }
+        .recipe-section h4 {
+            margin-bottom: 10px;
+            color: #666;
+        }
+        .recipe-section ul,
+        .recipe-section ol {
+            margin-left: 20px;
+        }
+        .recipe-section li {
+            margin-bottom: 8px;
+            line-height: 1.6;
+        }
+        .nutritional-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 10px;
+        }
+        .nutritional-grid div {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 6px;
+        }
+        @media (max-width: 968px) {
+            .gastro-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="gastro-container">
+        <h1>🍳 Rezeptvorschläge</h1>
+        <p><a href="/dashboard">← Zurück zum Dashboard</a></p>
+        
+        <div class="gastro-grid">
+            <div class="gastro-card">
+                <h2>Eingaben</h2>
+                <form method="POST" action="/gastro/recipes">
+                    <div class="form-group">
+                        <label for="zutaten">Verfügbare Zutaten</label>
+                        <textarea id="zutaten" name="zutaten" rows="5" required 
+                                  placeholder="z.B. Tomaten, Mozzarella, Basilikum, Nudeln"></textarea>
+                        <small>Zutaten durch Komma trennen</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="vegetarisch" value="true">
+                            Nur vegetarische Rezepte
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" name="vegan" value="true">
+                            Nur vegane Rezepte
+                        </label>
+                    </div>
+
+                    <button type="submit" class="btn-primary">
+                        Rezepte finden
+                    </button>
+                </form>
+            </div>
+
+            <div>
+                {% if recipes %}
+                    {% for recipe in recipes %}
+                    <div class="recipe-card">
+                        <h3>{{ loop.index }}. {{ recipe.name }}</h3>
+                        <span class="badge">{{ recipe.kategorie }}</span>
+                        
+                        <div class="recipe-section">
+                            <h4>Zutaten:</h4>
+                            <ul>
+                                {% for zutat in recipe.zutaten_basis %}
+                                <li>{{ zutat }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+
+                        <div class="recipe-section">
+                            <h4>Zubereitung:</h4>
+                            <ol>
+                                {% for schritt in recipe.schritte %}
+                                <li>{{ schritt }}</li>
+                                {% endfor %}
+                            </ol>
+                        </div>
+
+                        {% if recipe.naehrwerte %}
+                        <div class="recipe-section">
+                            <h4>Nährwerte (ca. pro Portion):</h4>
+                            <div class="nutritional-grid">
+                                <div>Kalorien: {{ recipe.naehrwerte.kalorien }} kcal</div>
+                                <div>Protein: {{ recipe.naehrwerte.protein }} g</div>
+                                <div>Kohlenhydrate: {{ recipe.naehrwerte.kohlenhydrate }} g</div>
+                                <div>Fett: {{ recipe.naehrwerte.fett }} g</div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="gastro-card">
+                        <p>Geben Sie Zutaten ein, um Rezeptvorschläge zu erhalten.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</body>
+</html>

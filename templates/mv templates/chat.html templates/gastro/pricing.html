@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preiskalkulation</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .gastro-container {
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        .gastro-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-top: 30px;
+        }
+        .gastro-card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        .ingredient-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr auto;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .ingredient-row input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+        .btn-primary, .btn-secondary {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+        .btn-primary {
+            background: #007bff;
+            color: white;
+            width: 100%;
+        }
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        .btn-remove {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .result-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .result-table th,
+        .result-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        .result-table th {
+            background: #f8f9fa;
+        }
+        .pricing-summary {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .summary-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .summary-row.highlight {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #28a745;
+            border-bottom: none;
+        }
+        @media (max-width: 968px) {
+            .gastro-grid {
+                grid-template-columns: 1fr;
+            }
+            .ingredient-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="gastro-container">
+        <h1>💰 Preiskalkulation</h1>
+        <p><a href="/dashboard">← Zurück zum Dashboard</a></p>
+        
+        <div class="gastro-grid">
+            <div class="gastro-card">
+                <h2>Eingaben</h2>
+                <form method="POST" action="/gastro/pricing" id="pricingForm">
+                    <div class="form-group">
+                        <label for="gericht">Gericht</label>
+                        <input type="text" id="gericht" name="gericht" required 
+                               placeholder="z.B. Pasta Carbonara">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="zielmarge">Zielmarge (%)</label>
+                        <input type="number" id="zielmarge" name="zielmarge" 
+                               value="250" min="100" max="500" step="10">
+                        <small>Standard Gastronomie: 250-300%</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Zutaten</label>
+                        <div id="ingredientsContainer">
+                            <div class="ingredient-row">
+                                <input type="text" name="zutat_name_0" placeholder="Zutat" required>
+                                <input type="number" name="zutat_menge_0" placeholder="Menge" 
+                                       step="0.01" min="0.01" value="1" required>
+                                <input type="number" name="zutat_preis_0" placeholder="EK €" 
+                                       step="0.01" min="0.01" value="1" required>
+                            </div>
+                        </div>
+                        <button type="button" class="btn-secondary" onclick="addIngredient()">
+                            + Zutat hinzufügen
+                        </button>
+                    </div>
+
+                    <button type="submit" class="btn-primary">
+                        Preis berechnen
+                    </button>
+                </form>
+            </div>
+
+            {% if result %}
+            <div class="gastro-card">
+                <h2>Kalkulation: {{ gericht }}</h2>
+                
+                <table class="result-table">
+                    <thead>
+                        <tr>
+                            <th>Zutat</th>
+                            <th>Menge</th>
+                            <th>EK-Preis</th>
+                            <th>Kosten</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for detail in result.details %}
+                        <tr>
+                            <td>{{ detail.name }}</td>
+                            <td>{{ detail.menge }}</td>
+                            <td>{{ "%.2f"|format(detail.ek_preis) }} €</td>
+                            <td>{{ "%.2f"|format(detail.kosten) }} €</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+
+                <div class="pricing-summary">
+                    <div class="summary-row">
+                        <span>Wareneinsatz:</span>
+                        <span>{{ "%.2f"|format(result.wareneinsatz) }} €</span>
+                    </div>
+                    <div class="summary-row">
+                        <span>Zielmarge:</span>
+                        <span>{{ result.zielmarge|int }}%</span>
+                    </div>
+                    <div class="summary-row">
+                        <span>Gewinn:</span>
+                        <span>{{ "%.2f"|format(result.gewinn_pro_portion) }} €</span>
+                    </div>
+                    <div class="summary-row highlight">
+                        <span>Empfohlener VK:</span>
+                        <span>{{ "%.2f"|format(result.vk_empfohlen) }} €</span>
+                    </div>
+                </div>
+
+                <a href="/gastro/pricing/export/csv" style="display: inline-block; margin-top: 20px; padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 6px;">
+                    📊 Als CSV exportieren
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+    let ingredientCount = 1;
+    
+    function addIngredient() {
+        const container = document.getElementById('ingredientsContainer');
+        const newRow = document.createElement('div');
+        newRow.className = 'ingredient-row';
+        newRow.innerHTML = `
+            <input type="text" name="zutat_name_${ingredientCount}" placeholder="Zutat" required>
+            <input type="number" name="zutat_menge_${ingredientCount}" placeholder="Menge" 
+                   step="0.01" min="0.01" value="1" required>
+            <input type="number" name="zutat_preis_${ingredientCount}" placeholder="EK €" 
+                   step="0.01" min="0.01" value="1" required>
+            <button type="button" class="btn-remove" onclick="this.parentElement.remove()">×</button>
+        `;
+        container.appendChild(newRow);
+        ingredientCount++;
+    }
+    </script>
+</body>
+</html>
