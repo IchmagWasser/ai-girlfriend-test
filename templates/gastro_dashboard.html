@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gastro Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            color: #ef4444;
+        }
+        .btn-logout {
+            padding: 10px 20px;
+            background: #6c757d;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+        }
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .tool-card {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            transition: transform 0.3s;
+            text-decoration: none;
+            color: inherit;
+            display: block;
+        }
+        .tool-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .tool-icon {
+            font-size: 4rem;
+            margin-bottom: 15px;
+        }
+        .tool-card h2 {
+            color: #ef4444;
+            margin-bottom: 10px;
+        }
+        .tool-card p {
+            color: #666;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🍽️ Gastro Dashboard</h1>
+            <a href="/logout" class="btn-logout">Logout</a>
+        </div>
+
+        <div class="tools-grid">
+            <a href="/gastro/shopping-list" class="tool-card">
+                <div class="tool-icon">🛒</div>
+                <h2>Einkaufslisten-Generator</h2>
+                <p>Automatische Zutatenlisten mit Mengenberechnung und Kostenschätzung</p>
+            </a>
+
+            <a href="/gastro/pricing" class="tool-card">
+                <div class="tool-icon">💰</div>
+                <h2>Kalkulation & Preisempfehlung</h2>
+                <p>Wareneinsatz berechnen und optimale Verkaufspreise ermitteln</p>
+            </a>
+
+            <a href="/gastro/recipes" class="tool-card">
+                <div class="tool-icon">🍳</div>
+                <h2>Rezepte & Menüplan</h2>
+                <p>KI-gestützte Rezeptvorschläge basierend auf verfügbaren Zutaten</p>
+            </a>
+        </div>
+    </div>
+</body>
+</html>
