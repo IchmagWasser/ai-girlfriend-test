@@ -500,10 +500,14 @@ animation.style.setProperty('--selected-color', color);
 portal.classList.add('active');
 
 setTimeout(() => {
-window.location.href = `/login?service=${service}`;
-}, 2500);
+        // NEU: Unterschiedliche Weiterleitungen je nach Service
+        if (service === 'gastro') {
+            window.location.href = `/gastro-login`;  // Separate Gastro-Login-Seite
+        } else {
+            window.location.href = `/waitlist?service=${service}`;  // Andere zu Warteliste
+        }
+    }, 2500);
 }
-
 // Initialize
 createStars();
 createParticles();

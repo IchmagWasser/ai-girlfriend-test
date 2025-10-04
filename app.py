@@ -11,6 +11,7 @@ import hashlib
 import csv
 import io
 import tempfile
+from io import BytesIO
 import html
 import hmac
 import json
@@ -4393,7 +4394,47 @@ async def login_with_service(request: Request, service: str = None):
         "request": request,
         "service": service
     })
+# ==================== GASTRO-SPEZIFISCHER LOGIN ====================
 
+@app.get("/gastro-login", response_class=HTMLResponse)
+async def gastro_login_page(request: Request):
+    """Separate Login-Seite für Gastro-Service"""
+    return templates.TemplateResponse("gastro_login.html", {
+        "request": request
+    })
+
+@app.post("/gastro-login")
+async def gastro_login_post(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    """Login mit Weiterleitung zu Gastro-Dashboard"""
+    user = authenticate_user(db, username, password)
+    
+    if not user:
+        return templates.TemplateResponse("gastro_login.html", {
+            "request": request,
+            "error": "Ungültige Anmeldedaten"
+        })
+    
+    request.session["user_id"] = user.id
+    return RedirectResponse("/gastro-dashboard", status_code=303)
+
+@app.get("/gastro-dashboard", response_class=HTMLResponse)
+async def gastro_dashboard(request: Request):
+    """Gastro-spezifisches Dashboard"""
+    redirect = require_active_session(request)
+    if redirect:
+        return RedirectResponse("/gastro-login", status_code=303)
+    
+    username = request.session.get("username")
+    
+    return templates.TemplateResponse("gastro_dashboard.html", {
+        "request": request,
+        "username": username
+    })
 # ──────────────────────────────
 # Routes - Chat
 # ──────────────────────────────
@@ -6543,3 +6584,256 @@ async def shutdown():
     except Exception as e:
         logger.error(f"[SHUTDOWN] Error during shutdown: {e}")
 
+from services.shopping import generate_shopping_list
+from services.pricing import calculate_pricing
+from services.recipes import generate_recipes
+from services.exports import generate_csv_shopping_list, generate_csv_pricing
+
+# EINKAUFSLISTE
+@app.get("/gastro/shopping-list", response_class=HTMLResponse)
+async def shopping_list_page(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    
+    return templates.TemplateResponse("gastro/shopping_list.html", {
+        "request": request,
+        "username": username
+    })
+
+@app.post("/gastro/shopping-list")
+async def shopping_list_generate(
+    request: Request,
+    gericht: str = Form(...),
+    portionen: int = Form(...)
+):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    result = generate_shopping_list(gericht, portionen)
+    
+    request.session["last_shopping_result"] = result
+    
+    return templates.TemplateResponse("gastro/shopping_list.html", {
+        "request": request,
+        "username": username,
+        "result": result
+    })
+
+@app.get("/gastro/shopping-list/export/csv")
+async def export_shopping_csv(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    result = request.session.get("last_shopping_result")
+    if not result:
+        return RedirectResponse("/gastro/shopping-list")
+    
+    csv_content = generate_csv_shopping_list(result)
+    
+    return StreamingResponse(
+        io.BytesIO(csv_content.encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=einkaufsliste.csv"}
+    )
+
+# PREISKALKULATION
+@app.get("/gastro/pricing", response_class=HTMLResponse)
+async def pricing_page(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    return templates.TemplateResponse("gastro/pricing.html", {
+        "request": request,
+        "username": username
+    })
+
+@app.post("/gastro/pricing")
+async def pricing_calculate(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    form_data = await request.form()
+    
+    gericht = form_data.get("gericht")
+    zielmarge = float(form_data.get("zielmarge", 250))
+    
+    zutaten = []
+    i = 0
+    while f"zutat_name_{i}" in form_data:
+        zutaten.append({
+            "name": form_data.get(f"zutat_name_{i}"),
+            "menge": float(form_data.get(f"zutat_menge_{i}", 1)),
+            "ek_preis": float(form_data.get(f"zutat_preis_{i}", 0))
+        })
+        i += 1
+    
+    result = calculate_pricing(zutaten, zielmarge)
+    request.session["last_pricing_result"] = {**result, "gericht": gericht}
+    
+    return templates.TemplateResponse("gastro/pricing.html", {
+        "request": request,
+        "username": username,
+        "result": result,
+        "gericht": gericht
+    })
+
+@app.get("/gastro/pricing/export/csv")
+async def export_pricing_csv(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    result = request.session.get("last_pricing_result")
+    if not result:
+        return RedirectResponse("/gastro/pricing")
+    
+    gericht = result.pop("gericht", "Unbenannt")
+    csv_content = generate_csv_pricing(result, gericht)
+    
+    return StreamingResponse(
+        io.BytesIO(csv_content.encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=kalkulation.csv"}
+    )
+
+# REZEPTE
+@app.get("/gastro/recipes", response_class=HTMLResponse)
+async def recipes_page(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    return templates.TemplateResponse("gastro/recipes.html", {
+        "request": request,
+        "username": username
+    })
+
+@app.post("/gastro/recipes")
+async def recipes_generate(
+    request: Request,
+    zutaten: str = Form(...),
+    vegetarisch: bool = Form(False),
+    vegan: bool = Form(False)
+):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    recipes = generate_recipes(zutaten, vegetarisch, vegan)
+    
+    return templates.TemplateResponse("gastro/recipes.html", {
+        "request": request,
+        "username": username,
+        "recipes": recipes
+    })        
+# PRICING
+@app.get("/gastro/pricing", response_class=HTMLResponse)
+async def pricing_page(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    return templates.TemplateResponse("gastro/pricing.html", {
+        "request": request,
+        "username": username
+    })
+
+@app.post("/gastro/pricing")
+async def pricing_calculate(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    form_data = await request.form()
+    
+    gericht = form_data.get("gericht")
+    zielmarge = float(form_data.get("zielmarge", 250))
+    
+    # Parse Zutaten
+    zutaten = []
+    i = 0
+    while f"zutat_name_{i}" in form_data:
+        zutaten.append({
+            "name": form_data.get(f"zutat_name_{i}"),
+            "menge": float(form_data.get(f"zutat_menge_{i}", 1)),
+            "ek_preis": float(form_data.get(f"zutat_preis_{i}", 0))
+        })
+        i += 1
+    
+    result = calculate_pricing(zutaten, zielmarge)
+    
+    # Speichere für CSV
+    request.session["last_pricing_result"] = {**result, "gericht": gericht}
+    
+    return templates.TemplateResponse("gastro/pricing.html", {
+        "request": request,
+        "username": username,
+        "result": result,
+        "gericht": gericht
+    })
+
+@app.get("/gastro/pricing/export/csv")
+async def export_pricing_csv(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    result = request.session.get("last_pricing_result")
+    if not result:
+        return RedirectResponse("/gastro/pricing")
+    
+    gericht = result.pop("gericht", "Unbenannt")
+    csv_content = generate_csv_pricing(result, gericht)
+    
+    return StreamingResponse(
+        io.BytesIO(csv_content.encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=kalkulation.csv"}
+    )
+
+# RECIPES
+@app.get("/gastro/recipes", response_class=HTMLResponse)
+async def recipes_page(request: Request):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    return templates.TemplateResponse("gastro/recipes.html", {
+        "request": request,
+        "username": username
+    })
+
+@app.post("/gastro/recipes")
+async def recipes_generate(
+    request: Request,
+    zutaten: str = Form(...),
+    vegetarisch: bool = Form(False),
+    vegan: bool = Form(False)
+):
+    redirect = require_active_session(request)
+    if redirect:
+        return redirect
+    
+    username = request.session.get("username")
+    recipes = generate_recipes(zutaten, vegetarisch, vegan)
+    
+    return templates.TemplateResponse("gastro/recipes.html", {
+        "request": request,
+        "username": username,
+        "recipes": recipes
+    })
