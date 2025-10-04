@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Einkaufslisten-Generator</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .gastro-container {
+            max-width: 1200px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        .gastro-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-top: 30px;
+        }
+        .gastro-card {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        .btn-primary {
+            background: #007bff;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+            width: 100%;
+        }
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+        .result-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        .result-table th,
+        .result-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        .result-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+        .total-row {
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+        .export-btn {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 10px 20px;
+            background: #28a745;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+        }
+        @media (max-width: 968px) {
+            .gastro-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="gastro-container">
+        <h1>🛒 Einkaufslisten-Generator</h1>
+        <p><a href="/gastro-dashboard">← Zurück zum Gastro Dashboard</a></p>
+        
+        <div class="gastro-grid">
+            <div class="gastro-card">
+                <h2>Eingaben</h2>
+                <form method="POST" action="/gastro/shopping-list">
+                    <div class="form-group">
+                        <label for="gericht">Gericht</label>
+                        <input type="text" id="gericht" name="gericht" required 
+                               placeholder="z.B. Spaghetti Carbonara">
+                        <small>Tipp: Probieren Sie "Spaghetti Carbonara" oder "Pizza Margherita"</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="portionen">Anzahl Portionen</label>
+                        <input type="number" id="portionen" name="portionen" required 
+                               min="1" max="100" value="4">
+                    </div>
+
+                    <button type="submit" class="btn-primary">
+                        Einkaufsliste generieren
+                    </button>
+                </form>
+            </div>
+
+            {% if result %}
+            <div class="gastro-card">
+                <h2>Ergebnis</h2>
+                <h3>{{ result.gericht }}</h3>
+                <p>Für {{ result.portionen }} Portionen</p>
+                
+                <table class="result-table">
+                    <thead>
+                        <tr>
+                            <th>Zutat</th>
+                            <th>Menge</th>
+                            <th>Kosten</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for zutat in result.zutaten %}
+                        <tr>
+                            <td>{{ zutat.name }}</td>
+                            <td>{{ zutat.menge_total }} {{ zutat.einheit }}</td>
+                            <td>{{ "%.2f"|format(zutat.kosten) }} €</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot>
+                        <tr class="total-row">
+                            <td colspan="2">Gesamtkosten</td>
+                            <td>{{ "%.2f"|format(result.gesamtkosten) }} €</td>
+                        </tr>
+                    </tfoot>
+                </table>
+
+                <a href="/gastro/shopping-list/export/csv" class="export-btn">
+                    📊 Als CSV exportieren
+                </a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
