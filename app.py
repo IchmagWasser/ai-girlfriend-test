@@ -4407,11 +4407,24 @@ async def gastro_login_page(request: Request):
 async def gastro_login_post(
     request: Request,
     username: str = Form(...),
-    password: str = Form(...),
-    db: Session = Depends(get_db)
+    password: str = Form(...)
 ):
-    """Login mit Weiterleitung zu Gastro-Dashboard"""
-    user = authenticate_user(db, username, password)
+    # Nutze deine bestehende Funktion
+    if check_login(username, password):
+        user = get_user(username)
+        if user.get("is_blocked"):
+            return templates.TemplateResponse("gastro_login.html", {
+                "request": request,
+                "error": "Account gesperrt"
+            })
+        
+        request.session["username"] = username
+        return RedirectResponse("/gastro-dashboard", status_code=303)
+    
+    return templates.TemplateResponse("gastro_login.html", {
+        "request": request,
+        "error": "Ungültige Anmeldedaten"
+    })
     
     if not user:
         return templates.TemplateResponse("gastro_login.html", {
