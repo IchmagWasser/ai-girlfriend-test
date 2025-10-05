@@ -4409,10 +4409,11 @@ async def gastro_login_post(
     username: str = Form(...),
     password: str = Form(...)
 ):
-    # Nutze deine bestehende Funktion
+    """Login mit Weiterleitung zu Gastro-Dashboard"""
     if check_login(username, password):
         user = get_user(username)
-        if user.get("is_blocked"):
+        
+        if user and user.get("is_blocked"):
             return templates.TemplateResponse("gastro_login.html", {
                 "request": request,
                 "error": "Account gesperrt"
@@ -4425,15 +4426,6 @@ async def gastro_login_post(
         "request": request,
         "error": "Ungültige Anmeldedaten"
     })
-    
-    if not user:
-        return templates.TemplateResponse("gastro_login.html", {
-            "request": request,
-            "error": "Ungültige Anmeldedaten"
-        })
-    
-    request.session["user_id"] = user.id
-    return RedirectResponse("/gastro-dashboard", status_code=303)
 
 @app.get("/gastro-dashboard", response_class=HTMLResponse)
 async def gastro_dashboard(request: Request):
@@ -4448,6 +4440,55 @@ async def gastro_dashboard(request: Request):
         "request": request,
         "username": username
     })
+
+@app.get("/waitlist", response_class=HTMLResponse)
+async def waitlist_page(request: Request):
+    service = request.query_params.get("service", "unbekannt")
+    return HTMLResponse(f"""
+        <html>
+        <head>
+            <title>Warteliste - {service}</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    background: linear-gradient(135deg, #667eea, #764ba2);
+                    margin: 0;
+                }}
+                .container {{
+                    background: white;
+                    padding: 40px;
+                    border-radius: 20px;
+                    text-align: center;
+                    max-width: 500px;
+                }}
+                h1 {{ color: #667eea; margin-bottom: 20px; }}
+                p {{ line-height: 1.6; color: #333; }}
+                a {{ 
+                    display: inline-block;
+                    margin-top: 20px;
+                    padding: 12px 24px;
+                    background: #667eea;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 8px;
+                }}
+                a:hover {{ background: #5a6fd8; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🚧 Coming Soon</h1>
+                <p>Der Service <strong>{service.title()}</strong> ist noch nicht verfügbar.</p>
+                <p>Wir arbeiten mit Hochdruck daran, diesen Service für Sie bereitzustellen.</p>
+                <a href="/">← Zurück zur Übersicht</a>
+            </div>
+        </body>
+        </html>
+    """)
 # ──────────────────────────────
 # Routes - Chat
 # ──────────────────────────────
