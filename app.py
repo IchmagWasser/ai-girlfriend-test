@@ -55,6 +55,48 @@ try:
 except ImportError as e:
     logger.warning(f"[FILES] Some file processing libraries missing: {e}")
 
+# ==================== CLIENT BRANDING CONFIGURATION ====================
+
+CLIENT_BRANDING = {
+    "default": {
+        "name": "GASTRO AI",
+        "tagline": "Intelligente Lösungen für Ihr Restaurant",
+        "logo": "/static/logos/default.png",
+        "primary_color": "#ef4444",
+        "secondary_color": "#dc2626",
+        "accent_color": "#991b1b"
+    },
+    "rossi": {
+        "name": "RISTORANTE ROSSI",
+        "tagline": "Tradizione Italiana dal 1987",
+        "logo": "/static/logos/rossi.png",
+        "primary_color": "#8b0000",
+        "secondary_color": "#660000",
+        "accent_color": "#4a0000"
+    },
+    "hofbraeu": {
+        "name": "HOFBRÄU MÜNCHEN",
+        "tagline": "Bayrische Gasthaus-Tradition",
+        "logo": "/static/logos/hofbraeu.png",
+        "primary_color": "#1e40af",
+        "secondary_color": "#1e3a8a",
+        "accent_color": "#1e293b"
+    },
+    "goldener-loewe": {
+        "name": "GOLDENER LÖWE",
+        "tagline": "Gehobene Gastronomie seit 1952",
+        "logo": "/static/logos/goldener-loewe.png",
+        "primary_color": "#d97706",
+        "secondary_color": "#b45309",
+        "accent_color": "#92400e"
+    }
+}
+
+def get_client_branding(client_id: str = None) -> dict:
+    """Holt Branding-Konfiguration für Client"""
+    if client_id and client_id in CLIENT_BRANDING:
+        return CLIENT_BRANDING[client_id]
+    return CLIENT_BRANDING["default"]
 
 def upgrade_database_for_threading():
     """Erweitert die Datenbank um Threading-Support"""
@@ -4394,37 +4436,81 @@ async def login_with_service(request: Request, service: str = None):
         "request": request,
         "service": service
     })
-# ==================== GASTRO-SPEZIFISCHER LOGIN ====================
+# ==================== GASTRO-SPEZIFISCHER LOGIN MIT WHITE-LABEL ====================
 
-@app.get("/gastro-login", response_class=HTMLResponse)
-async def gastro_login_page(request: Request):
-    """Separate Login-Seite für Gastro-Service"""
+@app.get("/gastro-login")
+async def gastro_login_page(request: Request, client: str = None):
+    """White-Label Login für Gastro-Kunden"""
+    branding = get_client_branding(client)
+    
     return templates.TemplateResponse("gastro_login.html", {
-        "request": request
+        "request": request,
+        "branding": branding,
+        "client_id": client or "default"
     })
 
 @app.post("/gastro-login")
 async def gastro_login_post(
     request: Request,
     username: str = Form(...),
-    password: str = Form(...)
+    password: str = Form(...),
+    client_id: str = Form("default")
 ):
-    """Login mit Weiterleitung zu Gastro-Dashboard"""
-    if check_login(username, password):
-        user = get_user(username)
-        
-        if user and user.get("is_blocked"):
-            return templates.TemplateResponse("gastro_login.html", {
-                "request": request,
-                "error": "Account gesperrt"
-            })
-        
-        request.session["username"] = username
-        return RedirectResponse("/gastro-dashboard", status_code=303)
+    """Login mit Client-Tracking"""
+    user = get_user(username)
     
-    return templates.TemplateResponse("gastro_login.html", {
+    if not user:
+        branding = get_client_branding(client_id)
+        return templates.TemplateResponse("gastro_login.html", {
+            "request": request,
+            "error": "Benutzer nicht gefunden",
+            "branding": branding,
+            "client_id": client_id
+        })
+    
+    if user["password"] != hash_password(password):
+        branding = get_client_branding(client_id)
+        return templates.TemplateResponse("gastro_login.html", {
+            "request": request,
+            "error": "Falsches Passwort",
+            "branding": branding,
+            "client_id": client_id
+        })
+    
+    if user.get("is_blocked"):
+        branding = get_client_branding(client_id)
+        return templates.TemplateResponse("gastro_login.html", {
+            "request": request,
+            "error": "Account gesperrt",
+            "branding": branding,
+            "client_id": client_id
+        })
+    
+    # Session speichern mit Client-Info
+    request.session["username"] = username
+    request.session["client_id"] = client_id
+    
+    return RedirectResponse(f"/gastro-dashboard?client={client_id}", status_code=303)
+
+@app.get("/gastro-dashboard")
+async def gastro_dashboard(request: Request, client: str = None):
+    """White-Label Dashboard"""
+    redirect = require_active_session(request)
+    if redirect:
+        return RedirectResponse(f"/gastro-login?client={client}", status_code=303)
+    
+    username = request.session.get("username")
+    client_id = request.session.get("client_id", client or "default")
+    branding = get_client_branding(client_id)
+    
+    user = get_user(username)
+    
+    return templates.TemplateResponse("gastro_dashboard.html", {
         "request": request,
-        "error": "Ungültige Anmeldedaten"
+        "username": username,
+        "user": user,
+        "branding": branding,
+        "client_id": client_id
     })
 
 @app.get("/gastro-dashboard", response_class=HTMLResponse)

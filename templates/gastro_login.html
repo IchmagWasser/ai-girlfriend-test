@@ -3,116 +3,345 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gastro Login - KI Service Universe</title>
+    <title>Gastro AI - Premium Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
+
         body {
             font-family: 'Inter', sans-serif;
-            background: linear-gradient(135deg, #ef4444, #dc2626);
-            height: 100vh;
+            background: linear-gradient(135deg, #1a0000 0%, #4a0000 50%, #1a0000 100%);
+            min-height: 100vh;
             display: flex;
-            align-items: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Animated Background */
+        .bg-pattern {
+            position: absolute;
+            inset: 0;
+            opacity: 0.05;
+            background-image: 
+                repeating-linear-gradient(45deg, transparent, transparent 100px, #fff 100px, #fff 101px),
+                repeating-linear-gradient(-45deg, transparent, transparent 100px, #fff 100px, #fff 101px);
+            animation: patternMove 20s linear infinite;
+        }
+
+        @keyframes patternMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(50px, 50px); }
+        }
+
+        /* Left Side - Branding */
+        .brand-side {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
             justify-content: center;
+            align-items: center;
+            padding: 60px;
+            position: relative;
+            z-index: 1;
         }
-        .login-container {
-            background: white;
-            padding: 40px;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            width: 90%;
-            max-width: 400px;
-        }
-        .logo {
+
+        .brand-logo {
+            font-family: 'Playfair Display', serif;
+            font-size: 4rem;
+            font-weight: 700;
+            color: #fff;
             text-align: center;
-            font-size: 3rem;
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+            text-shadow: 0 4px 20px rgba(239, 68, 68, 0.5);
+        }
+
+        .brand-tagline {
+            font-size: 1.3rem;
+            color: rgba(255, 255, 255, 0.9);
+            text-align: center;
+            margin-bottom: 40px;
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+
+        .features-list {
+            list-style: none;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .features-list li {
+            padding: 12px 0;
+            font-size: 1.05rem;
+            position: relative;
+            padding-left: 30px;
+        }
+
+        .features-list li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: #ef4444;
+            font-weight: bold;
+            font-size: 1.3rem;
+        }
+
+        /* Right Side - Login Form */
+        .login-side {
+            flex: 0 0 550px;
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 80px 70px;
+            box-shadow: -10px 0 50px rgba(0, 0, 0, 0.5);
+            position: relative;
+            z-index: 2;
+        }
+
+        .login-header {
+            margin-bottom: 50px;
+        }
+
+        .login-header h1 {
+            font-family: 'Playfair Display', serif;
+            font-size: 2.5rem;
+            color: #1a1a1a;
             margin-bottom: 10px;
         }
-        h1 {
-            text-align: center;
-            color: #ef4444;
+
+        .login-header p {
+            color: #666;
+            font-size: 1rem;
+        }
+
+        .form-group {
             margin-bottom: 30px;
         }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label {
+
+        .form-label {
             display: block;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
             color: #333;
-            font-weight: 600;
+            font-weight: 500;
+            font-size: 0.95rem;
+            letter-spacing: 0.3px;
         }
-        input {
+
+        .form-input {
             width: 100%;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            font-size: 16px;
+            padding: 16px 20px;
+            border: 2px solid #e5e5e5;
+            border-radius: 12px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            font-family: 'Inter', sans-serif;
+            background: #fafafa;
         }
-        input:focus {
+
+        .form-input:focus {
             outline: none;
             border-color: #ef4444;
+            background: #fff;
+            box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.1);
         }
-        .btn {
+
+        .btn-login {
             width: 100%;
-            padding: 14px;
-            background: #ef4444;
+            padding: 18px;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
             color: white;
             border: none;
-            border-radius: 8px;
-            font-size: 16px;
+            border-radius: 12px;
+            font-size: 1.05rem;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s;
+            transition: all 0.3s ease;
+            letter-spacing: 0.5px;
+            margin-top: 10px;
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
         }
-        .btn:hover {
-            background: #dc2626;
+
+        .btn-login:hover {
             transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(239, 68, 68, 0.4);
         }
-        .error {
+
+        .btn-login:active {
+            transform: translateY(0);
+        }
+
+        .error-message {
             background: #fee;
             color: #c00;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            text-align: center;
+            padding: 16px;
+            border-radius: 10px;
+            margin-bottom: 25px;
+            border-left: 4px solid #ef4444;
+            font-size: 0.95rem;
         }
+
         .back-link {
             text-align: center;
-            margin-top: 20px;
+            margin-top: 30px;
         }
+
         .back-link a {
-            color: #ef4444;
+            color: #666;
             text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.3s;
+        }
+
+        .back-link a:hover {
+            color: #ef4444;
+        }
+
+        .divider {
+            text-align: center;
+            margin: 35px 0;
+            position: relative;
+        }
+
+        .divider::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: #e5e5e5;
+        }
+
+        .divider span {
+            background: rgba(255, 255, 255, 0.98);
+            padding: 0 15px;
+            position: relative;
+            color: #999;
+            font-size: 0.9rem;
+        }
+
+        .trust-badge {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 1px solid #e5e5e5;
+        }
+
+        .trust-badge p {
+            color: #999;
+            font-size: 0.85rem;
+            margin-bottom: 10px;
+        }
+
+        .trust-icons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            opacity: 0.5;
+        }
+
+        @media (max-width: 1024px) {
+            body {
+                flex-direction: column;
+            }
+            
+            .brand-side {
+                padding: 40px 30px;
+                min-height: 40vh;
+            }
+
+            .login-side {
+                flex: 1;
+                padding: 50px 30px;
+            }
+
+            .brand-logo {
+                font-size: 2.5rem;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="login-container">
-        <div class="logo">🍽️</div>
-        <h1>Gastro Login</h1>
+    <div class="bg-pattern"></div>
+
+    <div class="brand-side">
+        <div class="brand-logo">GASTRO AI</div>
+        <p class="brand-tagline">Intelligente Lösungen für Ihr Restaurant</p>
         
+        <ul class="features-list">
+            <li>Automatisierte Einkaufslisten & Kalkulation</li>
+            <li>KI-gestützte Rezeptentwicklung</li>
+            <li>Optimierte Warenwirtschaft</li>
+            <li>Professionelle Preisgestaltung</li>
+        </ul>
+    </div>
+
+    <div class="login-side">
+        <div class="login-header">
+            <h1>Willkommen zurück</h1>
+            <p>Melden Sie sich an, um fortzufahren</p>
+        </div>
+
         {% if error %}
-        <div class="error">{{ error }}</div>
+        <div class="error-message">
+            {{ error }}
+        </div>
         {% endif %}
 
         <form method="POST" action="/gastro-login">
             <div class="form-group">
-                <label for="username">Benutzername</label>
-                <input type="text" id="username" name="username" required>
+                <label class="form-label" for="username">Benutzername</label>
+                <input 
+                    type="text" 
+                    id="username" 
+                    name="username" 
+                    class="form-input"
+                    required
+                    autocomplete="username"
+                >
             </div>
+
             <div class="form-group">
-                <label for="password">Passwort</label>
-                <input type="password" id="password" name="password" required>
+                <label class="form-label" for="password">Passwort</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    name="password" 
+                    class="form-input"
+                    required
+                    autocomplete="current-password"
+                >
             </div>
-            <button type="submit" class="btn">Anmelden</button>
+
+            <button type="submit" class="btn-login">
+                Anmelden
+            </button>
         </form>
 
+        <div class="divider">
+            <span>Noch kein Zugang?</span>
+        </div>
+
         <div class="back-link">
+            <p style="color: #666; margin-bottom: 15px;">Kontaktieren Sie uns für einen Premium-Account</p>
             <a href="/">← Zurück zur Übersicht</a>
+        </div>
+
+        <div class="trust-badge">
+            <p>Vertraut von über 500+ Restaurants</p>
+            <div class="trust-icons">
+                <span style="font-size: 1.5rem;">🔒</span>
+                <span style="font-size: 1.5rem;">⚡</span>
+                <span style="font-size: 1.5rem;">🏆</span>
+            </div>
         </div>
     </div>
 </body>
