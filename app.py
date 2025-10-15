@@ -6977,3 +6977,62 @@ async def recipes_generate(
         "username": username,
         "recipes": recipes
     })
+
+#habe hier die weiteren routes für gastro tools geach 
+# BEISPIEL: Shopping List mit Client-Tracking
+
+@app.get("/gastro/shopping-list", response_class=HTMLResponse)
+async def shopping_list_page(request: Request, client: str = None):
+    redirect = require_active_session(request)
+    if redirect:
+        return RedirectResponse(f"/gastro-login?client={client or 'default'}", status_code=303)
+    
+    username = request.session.get("username")
+    client_id = request.session.get("client_id", client or "default")
+    branding = get_client_branding(client_id)
+    
+    return templates.TemplateResponse("gastro/shopping_list.html", {
+        "request": request,
+        "username": username,
+        "branding": branding,
+        "client_id": client_id
+    })
+
+@app.post("/gastro/shopping-list")
+async def shopping_list_generate(
+    request: Request,
+    gericht: str = Form(...),
+    portionen: int = Form(...),
+    client_id: str = Form("default")
+):
+    redirect = require_active_session(request)
+    if redirect:
+        return RedirectResponse(f"/gastro-login?client={client_id}", status_code=303)
+    
+    username = request.session.get("username")
+    branding = get_client_branding(client_id)
+    result = generate_shopping_list(gericht, portionen)
+    
+    request.session["last_shopping_result"] = result
+    
+    return templates.TemplateResponse("gastro/shopping_list.html", {
+        "request": request,
+        "username": username,
+        "result": result,
+        "branding": branding,
+        "client_id": client_id
+    })
+
+#habe hier die neue admin route gemahct 
+@app.get("/admin/clients", response_class=HTMLResponse)
+async def admin_clients(request: Request):
+    guard = admin_redirect_guard(request)
+    if guard:
+        return guard
+    
+    clients = CLIENT_BRANDING.copy()
+    
+    return templates.TemplateResponse("admin_clients.html", {
+        "request": request,
+        "clients": clients
+    })

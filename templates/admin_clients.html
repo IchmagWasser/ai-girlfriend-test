@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Client-Verwaltung</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 40px;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .client-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .client-card {
+            border: 2px solid #ddd;
+            padding: 20px;
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+        .client-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .client-logo {
+            max-width: 100%;
+            max-height: 80px;
+            margin-bottom: 15px;
+        }
+        .client-name {
+            font-size: 1.3rem;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .client-tagline {
+            color: #666;
+            margin-bottom: 15px;
+        }
+        .client-colors {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .color-box {
+            width: 40px;
+            height: 40px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+        .client-link {
+            display: block;
+            margin-top: 15px;
+            padding: 8px;
+            background: #667eea;
+            color: white;
+            text-align: center;
+            text-decoration: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #667eea;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/admin" class="back-link">← Zurück zum Admin-Panel</a>
+        <h1>Client-Verwaltung ({{ clients|length }} Clients)</h1>
+        
+        <div class="client-grid">
+            {% for client_id, client in clients.items() %}
+            <div class="client-card">
+                {% if client.logo %}
+                <img src="{{ client.logo }}" alt="{{ client.name }}" class="client-logo">
+                {% endif %}
+                
+                <div class="client-name">{{ client.name }}</div>
+                <div class="client-tagline">{{ client.tagline }}</div>
+                
+                <div class="client-colors">
+                    <div class="color-box" style="background: {{ client.primary_color }}" title="Primary"></div>
+                    <div class="color-box" style="background: {{ client.secondary_color }}" title="Secondary"></div>
+                    <div class="color-box" style="background: {{ client.accent_color }}" title="Accent"></div>
+                </div>
+                
+                <a href="/gastro-login?client={{ client_id }}" target="_blank" class="client-link">
+                    Login-Seite öffnen
+                </a>
+                
+                <div style="margin-top: 10px; font-size: 0.85rem; color: #999;">
+                    Client ID: <code>{{ client_id }}</code>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
