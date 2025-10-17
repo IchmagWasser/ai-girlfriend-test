@@ -974,7 +974,297 @@
         // Initial setup
         input.focus();
         scrollToBottom();
-    </script>
+    // Dark Mode Toggle - Füge dieses JavaScript zu deinen Templates hinzu
+
+// CSS-Variablen für Theme-Switching
+const themes = {
+    dark: {
+        '--bg-primary': '#1a1a2e',
+        '--bg-secondary': '#2c3e50',
+        '--bg-tertiary': '#34495e',
+        '--text-primary': '#ecf0f1',
+        '--text-secondary': '#bdc3c7',
+        '--text-muted': '#95a5a6',
+        '--accent-color': '#e74c3c',
+        '--accent-hover': '#c0392b',
+        '--border-color': '#34495e',
+        '--shadow': 'rgba(0,0,0,0.3)',
+        '--success': '#2ecc71',
+        '--warning': '#f39c12',
+        '--danger': '#e74c3c',
+        '--info': '#3498db'
+    },
+    light: {
+        '--bg-primary': '#ffffff',
+        '--bg-secondary': '#f8f9fa',
+        '--bg-tertiary': '#e9ecef',
+        '--text-primary': '#333333',
+        '--text-secondary': '#666666',
+        '--text-muted': '#999999',
+        '--accent-color': '#007bff',
+        '--accent-hover': '#0056b3',
+        '--border-color': '#dee2e6',
+        '--shadow': 'rgba(0,0,0,0.1)',
+        '--success': '#28a745',
+        '--warning': '#ffc107',
+        '--danger': '#dc3545',
+        '--info': '#17a2b8'
+    }
+};
+
+// Theme-Management Klasse
+class ThemeManager {
+    constructor() {
+        this.currentTheme = this.getStoredTheme() || 'dark';
+        this.init();
+    }
+    
+    init() {
+        this.applyTheme(this.currentTheme);
+        this.createToggleButton();
+        this.addKeyboardShortcut();
+    }
+    
+    getStoredTheme() {
+        return localStorage.getItem('user-theme') || 'dark';
+    }
+    
+    setStoredTheme(theme) {
+        localStorage.setItem('user-theme', theme);
+    }
+    
+    applyTheme(theme) {
+        const root = document.documentElement;
+        const themeVars = themes[theme];
+        
+        if (themeVars) {
+            Object.entries(themeVars).forEach(([property, value]) => {
+                root.style.setProperty(property, value);
+            });
+            
+            // Body-Klasse für spezifische Styles
+            document.body.className = document.body.className.replace(/theme-\w+/g, '');
+            document.body.classList.add(`theme-${theme}`);
+            
+            this.currentTheme = theme;
+            this.setStoredTheme(theme);
+            
+            // Server benachrichtigen (falls eingeloggt)
+            this.syncWithServer(theme);
+        }
+    }
+    
+    toggleTheme() {
+        const newTheme = this.currentTheme === 'dark' ? 'light' : 'dark';
+        this.applyTheme(newTheme);
+        
+        // Animation für smooth transition
+        document.body.style.transition = 'all 0.3s ease';
+        setTimeout(() => {
+            document.body.style.transition = '';
+        }, 300);
+    }
+    
+    createToggleButton() {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'theme-toggle';
+        toggleBtn.innerHTML = this.getThemeIcon();
+        toggleBtn.title = `Zu ${this.currentTheme === 'dark' ? 'Hellem' : 'Dunklem'} Modus wechseln`;
+        toggleBtn.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            border: 2px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 20px;
+            cursor: pointer;
+            z-index: 1000;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px var(--shadow);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        toggleBtn.addEventListener('click', () => {
+            this.toggleTheme();
+            toggleBtn.innerHTML = this.getThemeIcon();
+            toggleBtn.title = `Zu ${this.currentTheme === 'dark' ? 'Hellem' : 'Dunklem'} Modus wechseln`;
+            
+            // Button animation
+            toggleBtn.style.transform = 'scale(0.9)';
+            setTimeout(() => {
+                toggleBtn.style.transform = 'scale(1)';
+            }, 150);
+        });
+        
+        toggleBtn.addEventListener('mouseenter', () => {
+            toggleBtn.style.transform = 'scale(1.1)';
+            toggleBtn.style.boxShadow = '0 6px 20px var(--shadow)';
+        });
+        
+        toggleBtn.addEventListener('mouseleave', () => {
+            toggleBtn.style.transform = 'scale(1)';
+            toggleBtn.style.boxShadow = '0 4px 15px var(--shadow)';
+        });
+        
+        document.body.appendChild(toggleBtn);
+    }
+    
+    getThemeIcon() {
+        return this.currentTheme === 'dark' ? '☀️' : '🌙';
+    }
+    
+    addKeyboardShortcut() {
+        document.addEventListener('keydown', (e) => {
+            // Ctrl/Cmd + Shift + D für Theme-Toggle
+            if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'D') {
+                e.preventDefault();
+                this.toggleTheme();
+                document.getElementById('theme-toggle').innerHTML = this.getThemeIcon();
+            }
+        });
+    }
+    
+    async syncWithServer(theme) {
+        // Nur wenn User eingeloggt ist
+        try {
+            const sessionResponse = await fetch('/api/session-info');
+            const sessionData = await sessionResponse.json();
+            
+            if (sessionData.active) {
+                await fetch('/settings/theme', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `theme=${theme}`
+                });
+            }
+        } catch (error) {
+            console.log('Theme sync failed:', error);
+        }
+    }
+}
+
+// CSS für Theme-Support (füge zu <head> hinzu)
+const themeCSS = `
+    :root {
+        /* Default Dark Theme */
+        --bg-primary: #1a1a2e;
+        --bg-secondary: #2c3e50;
+        --bg-tertiary: #34495e;
+        --text-primary: #ecf0f1;
+        --text-secondary: #bdc3c7;
+        --text-muted: #95a5a6;
+        --accent-color: #e74c3c;
+        --accent-hover: #c0392b;
+        --border-color: #34495e;
+        --shadow: rgba(0,0,0,0.3);
+        --success: #2ecc71;
+        --warning: #f39c12;
+        --danger: #e74c3c;
+        --info: #3498db;
+    }
+    
+    /* Smooth transitions für Theme-Wechsel */
+    *, *::before, *::after {
+        transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+    }
+    
+    /* Theme-spezifische Anpassungen */
+    .theme-light {
+        background: var(--bg-primary) !important;
+        color: var(--text-primary) !important;
+    }
+    
+    .theme-dark {
+        background: var(--bg-primary) !important;
+        color: var(--text-primary) !important;
+    }
+    
+    /* Responsive Theme Toggle Button */
+    @media (max-width: 768px) {
+        #theme-toggle {
+            top: 10px !important;
+            right: 10px !important;
+            width: 45px !important;
+            height: 45px !important;
+            font-size: 18px !important;
+        }
+    }
+    
+    /* Focus styles für Accessibility */
+    #theme-toggle:focus {
+        outline: 2px solid var(--accent-color);
+        outline-offset: 2px;
+    }
+`;
+
+// Theme-CSS in Head einfügen
+function addThemeCSS() {
+    const style = document.createElement('style');
+    style.textContent = themeCSS;
+    document.head.appendChild(style);
+}
+
+// Auto-Initialize wenn DOM geladen ist
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+        addThemeCSS();
+        window.themeManager = new ThemeManager();
+    });
+} else {
+    addThemeCSS();
+    window.themeManager = new ThemeManager();
+}
+
+// Utility-Funktionen für Template-Integration
+window.ThemeUtils = {
+    // Für bestehende Templates: Theme-bewusste Farben
+    getThemedColor: (lightColor, darkColor) => {
+        const currentTheme = window.themeManager?.currentTheme || 'dark';
+        return currentTheme === 'light' ? lightColor : darkColor;
+    },
+    
+    // Theme-Status abfragen
+    getCurrentTheme: () => {
+        return window.themeManager?.currentTheme || 'dark';
+    },
+    
+    // Theme programmatisch setzen
+    setTheme: (theme) => {
+        if (window.themeManager && themes[theme]) {
+            window.themeManager.applyTheme(theme);
+        }
+    }
+};
+
+// Für Templates: Theme-Change Event
+document.addEventListener('themeChanged', (e) => {
+    console.log('Theme changed to:', e.detail.theme);
+    // Hier können weitere Theme-spezifische Anpassungen gemacht werden
+});
+
+// Theme-Change Event dispatchen
+const originalApplyTheme = ThemeManager.prototype.applyTheme;
+ThemeManager.prototype.applyTheme = function(theme) {
+    originalApplyTheme.call(this, theme);
+    
+    const event = new CustomEvent('themeChanged', {
+        detail: { theme: theme }
+    });
+    document.dispatchEvent(event);
+};
+
+// Export für Module (falls verwendet)
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { ThemeManager, themes };
+}</script>
 </body>
 </html>_minutes <= 2) {
                             timerElement.classList.add('critical');

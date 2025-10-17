@@ -1,201 +1,748 @@
 <!DOCTYPE html>
 <html lang="de">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Chat durchsuchen - KI-Chat</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet"/>
-  <link href="/static/css/style.css" rel="stylesheet"/>
-</head>
-<body
-  data-theme="{{ theme|default('light') }}"
-  class="{% if theme|default('light') == 'dark' %}bg-dark text-light{% else %}bg-light{% endif %}"
->
-  <!-- Navigation -->
-  <nav class="navbar navbar-expand-lg {% if theme|default('light') == 'dark' %}navbar-dark bg-dark{% else %}navbar-light bg-light{% endif %} border-bottom">
-    <div class="container">
-      <a class="navbar-brand fw-bold" href="/chat">
-        <i class="bi bi-robot me-2"></i>KI-Chat
-      </a>
-
-      <div class="navbar-nav ms-auto">
-        <a class="nav-link" href="/chat"><i class="bi bi-chat-dots me-1"></i>Chat</a>
-        <a class="nav-link active" href="/search"><i class="bi bi-search me-1"></i>Suche</a>
-        <a class="nav-link" href="/conversations"><i class="bi bi-collection me-1"></i>Unterhaltungen</a>
-        <div class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
-            <i class="bi bi-person-circle me-1"></i>{{ username|default('User') }}
-          </a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="/persona"><i class="bi bi-emoji-smile me-1"></i>Persona</a></li>
-            <li><a class="dropdown-item" href="/subscription"><i class="bi bi-star me-1"></i>Subscription</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="/logout"><i class="bi bi-box-arrow-right me-1"></i>Logout</a></li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </nav>
-
-  <!-- Search Container -->
-  <div class="container mt-4">
-    <div class="row justify-content-center">
-      <div class="col-md-10 col-lg-8">
-        <div class="{% if theme|default('light') == 'dark' %}bg-secondary{% else %}bg-white{% endif %} rounded shadow-sm p-4">
-          <h2 class="mb-4"><i class="bi bi-search me-2"></i>Chat durchsuchen</h2>
-
-          <!-- Search Form -->
-          <div class="mb-4">
-            <div class="input-group input-group-lg">
-              <input type="text" class="form-control" id="searchQuery"
-                     placeholder="Wonach suchst du in deinen Chats..." autocomplete="off" />
-              <button class="btn btn-primary" type="button" id="searchBtn">
-                <i class="bi bi-search me-1"></i>Suchen
-              </button>
-            </div>
-            <div class="form-text">
-              <i class="bi bi-info-circle me-1"></i>
-              Suche nach Stichworten in deinem Chat-Verlauf
-            </div>
-          </div>
-
-          <!-- Search Results -->
-          <div id="searchResults" class="d-none">
-            <h5 class="mb-3">
-              <i class="bi bi-list-ul me-2"></i>Suchergebnisse
-              <span class="badge bg-primary ms-2" id="resultCount">0</span>
-            </h5>
-            <div id="resultsContainer"></div>
-          </div>
-
-          <!-- Loading Spinner -->
-          <div id="searchLoading" class="text-center d-none">
-            <div class="spinner-border text-primary" role="status">
-              <span class="visually-hidden">Suche läuft...</span>
-            </div>
-            <p class="mt-2">Durchsuche Chat-Verlauf...</p>
-          </div>
-
-          <!-- Empty State -->
-          <div id="emptyState" class="text-center text-muted">
-            <i class="bi bi-search display-1"></i>
-            <h4 class="mt-3">Chat durchsuchen</h4>
-            <p>Gib einen Suchbegriff ein, um deinen Chat-Verlauf zu durchsuchen.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Scripts -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script>
-    const searchQuery      = document.getElementById('searchQuery');
-    const searchBtn        = document.getElementById('searchBtn');
-    const searchResults    = document.getElementById('searchResults');
-    const searchLoading    = document.getElementById('searchLoading');
-    const emptyState       = document.getElementById('emptyState');
-    const resultsContainer = document.getElementById('resultsContainer');
-    const resultCount      = document.getElementById('resultCount');
-    const theme            = (document.body.dataset.theme || 'light').toLowerCase();
-    const cardBgClass      = theme === 'dark' ? 'bg-dark' : 'bg-light';
-
-    async function performSearch() {
-      const query = (searchQuery.value || '').trim();
-      if (!query) return;
-
-      searchResults.classList.add('d-none');
-      emptyState.classList.add('d-none');
-      searchLoading.classList.remove('d-none');
-
-      try {
-        const response = await fetch('/search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query })
-        });
-
-        if (!response.ok) {
-          const text = await response.text().catch(() => '');
-          throw new Error(`HTTP ${response.status} ${response.statusText} ${text}`);
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Durchsuchen</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
 
-        const data = await response.json();
-        const results = Array.isArray(data.results) ? data.results : [];
-        displayResults(results, data.query || query);
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
 
-      } catch (error) {
-        console.error('Search error:', error);
-        alert('Fehler bei der Suche: ' + error.message);
-      } finally {
-        searchLoading.classList.add('d-none');
-      }
-    }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
 
-    function displayResults(results, query) {
-      if (!results.length) {
-        resultsContainer.innerHTML = `
-          <div class="alert alert-info">
-            <i class="bi bi-info-circle me-2"></i>
-            Keine Ergebnisse für "<strong>${escapeHtml(query)}</strong>" gefunden.
-          </div>`;
-      } else {
-        resultsContainer.innerHTML = results.map(r => {
-          const roleBadge  = r.role === 'user' ? 'bg-primary' : 'bg-success';
-          const roleIcon   = r.role === 'user' ? 'bi-person' : 'bi-robot';
-          const roleLabel  = r.role === 'user' ? 'Du' : 'KI';
-          const timestamp  = formatDate(r.timestamp);
-          // r.snippet darf HTML enthalten (z. B. <mark>), daher bewusst nicht escapeHtml
-          return `
-            <div class="${cardBgClass} rounded p-3 mb-3 border">
-              <div class="d-flex justify-content-between align-items-start mb-2">
-                <span class="badge ${roleBadge}">
-                  <i class="bi ${roleIcon} me-1"></i>${roleLabel}
-                </span>
-                <small class="text-muted">${timestamp}</small>
-              </div>
-              <div class="search-snippet">${r.snippet || ''}</div>
-            </div>`;
-        }).join('');
-      }
-      resultCount.textContent = String(results.length);
-      searchResults.classList.remove('d-none');
-    }
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
 
-    searchBtn.addEventListener('click', performSearch);
-    searchQuery.addEventListener('keydown', e => { if (e.key === 'Enter') performSearch(); });
-    searchQuery.focus();
+        .header h1 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
 
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text == null ? '' : String(text);
-      return div.innerHTML;
-    }
+        .nav-links a {
+            color: #667eea;
+            text-decoration: none;
+            margin-right: 20px;
+            padding: 8px 15px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
 
-    function formatDate(dateString) {
-      const d = new Date(dateString);
-      if (isNaN(d.getTime())) return '';
-      return d.toLocaleDateString('de-DE') + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-    }
-  </script>
+        .nav-links a:hover {
+            background: #667eea;
+            color: white;
+        }
 
-  <style>
-    .search-snippet { line-height: 1.6; }
-    .search-snippet mark {
-      background-color: #fff3cd;
-      padding: 1px 3px;
-      border-radius: 3px;
-      font-weight: 600;
-    }
-    {% if theme|default('light') == 'dark' %}
-    .search-snippet mark {
-      background-color: #856404;
-      color: #fff3cd;
-    }
-    {% endif %}
-    .input-group-lg .form-control { border-radius: 0.5rem 0 0 0.5rem; }
-    .input-group-lg .btn         { border-radius: 0 0.5rem 0.5rem 0; }
-  </style>
+        .search-container {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .search-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .search-input-group {
+            display: flex;
+            gap: 10px;
+            align-items: stretch;
+        }
+
+        .search-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
+        }
+
+        .search-input:focus {
+            border-color: #667eea;
+            outline: none;
+        }
+
+        .search-btn {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .search-btn:hover {
+            background: #5a6fd8;
+            transform: translateY(-1px);
+        }
+
+        .search-filters {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .filter-group label {
+            font-weight: 500;
+            color: #555;
+        }
+
+        .filter-select, .filter-input {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .results-container {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #667eea;
+        }
+
+        .results-count {
+            font-size: 1.1em;
+            color: #667eea;
+            font-weight: 600;
+        }
+
+        .export-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            text-decoration: none;
+        }
+
+        .export-btn:hover {
+            background: #218838;
+        }
+
+        .search-result {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .search-result:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            border-color: #667eea;
+        }
+
+        .result-header {
+            background: #f8f9fa;
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .result-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .result-role {
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8em;
+        }
+
+        .role-user {
+            background: #667eea;
+            color: white;
+        }
+
+        .role-assistant {
+            background: #28a745;
+            color: white;
+        }
+
+        .result-content {
+            padding: 16px;
+        }
+
+        .result-snippet {
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+
+        .search-highlight {
+            background: #fff3cd;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-weight: 600;
+        }
+
+        .result-context {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #f0f0f0;
+        }
+
+        .context-messages {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .context-message {
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+            border-left: 3px solid;
+        }
+
+        .context-user {
+            background: #f8f9ff;
+            border-color: #667eea;
+        }
+
+        .context-assistant {
+            background: #f8fff8;
+            border-color: #28a745;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+        }
+
+        .stat-card h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .loading-spinner {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 10px;
+            color: #667eea;
+        }
+
+        .search-tips {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .search-tips h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .tips-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .tips-list li {
+            margin-bottom: 8px;
+            padding-left: 20px;
+            position: relative;
+        }
+
+        .tips-list li::before {
+            content: "💡";
+            position: absolute;
+            left: 0;
+        }
+
+        .suggestions-container {
+            position: relative;
+        }
+
+        .suggestions-list {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+
+        .suggestion-item {
+            padding: 10px 15px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+
+        .suggestion-item:hover {
+            background: #f0f0f0;
+        }
+
+        @media (max-width: 768px) {
+            .search-input-group {
+                flex-direction: column;
+            }
+
+            .search-filters {
+                grid-template-columns: 1fr;
+            }
+
+            .results-header {
+                flex-direction: column;
+                gap: 10px;
+                align-items: stretch;
+            }
+
+            .result-meta {
+                flex-direction: column;
+                gap: 5px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Chat durchsuchen</h1>
+            <div class="nav-links">
+                <a href="/chat">💬 Chat</a>
+                <a href="/search">🔍 Suche</a>
+                {% if request.session.get("username") == "admin" %}
+                <a href="/admin">👑 Admin</a>
+                {% endif %}
+                <a href="/logout">🚪 Logout</a>
+            </div>
+        </div>
+
+        <!-- Statistiken -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-number">{{ stats.total_messages }}</div>
+                <div class="stat-label">Nachrichten insgesamt</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ stats.threads|length }}</div>
+                <div class="stat-label">Threads</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ stats.daily_activity|length }}</div>
+                <div class="stat-label">Aktive Tage (30d)</div>
+            </div>
+        </div>
+
+        <!-- Suchformular -->
+        <div class="search-container">
+            <form class="search-form" id="searchForm">
+                <div class="search-input-group">
+                    <div class="suggestions-container">
+                        <input 
+                            type="text" 
+                            id="searchQuery" 
+                            class="search-input" 
+                            placeholder="Durchsuche deine Chat-Historie..."
+                            autocomplete="off"
+                        >
+                        <div class="suggestions-list" id="suggestionsList"></div>
+                    </div>
+                    <button type="submit" class="search-btn">🔍 Suchen</button>
+                </div>
+
+                <div class="search-filters">
+                    <div class="filter-group">
+                        <label for="threadFilter">Thread:</label>
+                        <select id="threadFilter" class="filter-select">
+                            <option value="">Alle Threads</option>
+                            {% for thread in threads %}
+                            <option value="{{ thread.id }}">{{ thread.title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label for="roleFilter">Nachrichtentyp:</label>
+                        <select id="roleFilter" class="filter-select">
+                            <option value="">Alle Nachrichten</option>
+                            <option value="user">Nur meine Nachrichten</option>
+                            <option value="assistant">Nur KI-Antworten</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label for="daysFilter">Zeitraum:</label>
+                        <select id="daysFilter" class="filter-select">
+                            <option value="">Alle Zeit</option>
+                            <option value="1">Letzter Tag</option>
+                            <option value="7">Letzte Woche</option>
+                            <option value="30">Letzter Monat</option>
+                            <option value="90">Letzte 3 Monate</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label for="limitFilter">Max. Ergebnisse:</label>
+                        <select id="limitFilter" class="filter-select">
+                            <option value="20">20</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- Suchtipps -->
+        <div class="search-tips">
+            <h3>Suchtipps:</h3>
+            <ul class="tips-list">
+                <li>Verwende mehrere Wörter für präzisere Ergebnisse</li>
+                <li>Nutze Anführungszeichen für exakte Phrasen: "genauer Text"</li>
+                <li>Filtere nach Thread oder Zeitraum für bessere Übersicht</li>
+                <li>Exportiere deine Suchergebnisse als CSV-Datei</li>
+            </ul>
+        </div>
+
+        <!-- Ladeindikator -->
+        <div class="loading-spinner" id="loadingSpinner">
+            <div class="spinner"></div>
+            <p>Durchsuche Chat-Historie...</p>
+        </div>
+
+        <!-- Ergebnisse -->
+        <div class="results-container" id="resultsContainer" style="display: none;">
+            <div class="results-header">
+                <div class="results-count" id="resultsCount">0 Ergebnisse gefunden</div>
+                <a href="#" class="export-btn" id="exportBtn" style="display: none;">📥 Als CSV exportieren</a>
+            </div>
+            <div id="searchResults"></div>
+        </div>
+
+        <!-- Empty State -->
+        <div class="empty-state" id="emptyState">
+            <h3>Bereit zum Suchen!</h3>
+            <p>Gib einen Suchbegriff ein, um deine Chat-Historie zu durchsuchen.</p>
+        </div>
+    </div>
+
+    <script>
+        let searchTimeout;
+        let currentQuery = '';
+        
+        // Elemente
+        const searchForm = document.getElementById('searchForm');
+        const searchQuery = document.getElementById('searchQuery');
+        const threadFilter = document.getElementById('threadFilter');
+        const roleFilter = document.getElementById('roleFilter');
+        const daysFilter = document.getElementById('daysFilter');
+        const limitFilter = document.getElementById('limitFilter');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const resultsCount = document.getElementById('resultsCount');
+        const searchResults = document.getElementById('searchResults');
+        const exportBtn = document.getElementById('exportBtn');
+        const emptyState = document.getElementById('emptyState');
+        const suggestionsList = document.getElementById('suggestionsList');
+
+        // Event Listeners
+        searchForm.addEventListener('submit', handleSearch);
+        searchQuery.addEventListener('input', handleSearchInput);
+        searchQuery.addEventListener('focus', showSuggestions);
+        searchQuery.addEventListener('blur', () => {
+            setTimeout(() => suggestionsList.style.display = 'none', 200);
+        });
+
+        // Filter-Änderungen lösen automatisch neue Suche aus
+        [threadFilter, roleFilter, daysFilter, limitFilter].forEach(filter => {
+            filter.addEventListener('change', () => {
+                if (currentQuery.trim()) {
+                    performSearch(currentQuery);
+                }
+            });
+        });
+
+        function handleSearch(e) {
+            e.preventDefault();
+            const query = searchQuery.value.trim();
+            if (query) {
+                performSearch(query);
+            }
+        }
+
+        function handleSearchInput(e) {
+            const query = e.target.value.trim();
+            
+            // Debounce für Live-Suche
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                if (query.length >= 2) {
+                    getSuggestions(query);
+                }
+                if (query.length >= 3) {
+                    performSearch(query);
+                }
+            }, 300);
+
+            if (query.length < 3) {
+                showEmptyState();
+            }
+        }
+
+        async function getSuggestions(partial) {
+            try {
+                const response = await fetch(`/api/search/suggestions?q=${encodeURIComponent(partial)}`);
+                const data = await response.json();
+                
+                if (data.suggestions && data.suggestions.length > 0) {
+                    suggestionsList.innerHTML = data.suggestions
+                        .map(suggestion => `<div class="suggestion-item" onclick="selectSuggestion('${suggestion}')">${suggestion}</div>`)
+                        .join('');
+                    suggestionsList.style.display = 'block';
+                } else {
+                    suggestionsList.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Fehler beim Laden der Vorschläge:', error);
+            }
+        }
+
+        function selectSuggestion(suggestion) {
+            searchQuery.value = suggestion;
+            suggestionsList.style.display = 'none';
+            performSearch(suggestion);
+        }
+
+        function showSuggestions() {
+            if (suggestionsList.innerHTML.trim() && searchQuery.value.length >= 2) {
+                suggestionsList.style.display = 'block';
+            }
+        }
+
+        async function performSearch(query) {
+            currentQuery = query;
+            
+            showLoading();
+            
+            try {
+                const params = new URLSearchParams({
+                    q: query,
+                    limit: limitFilter.value
+                });
+
+                if (threadFilter.value) params.append('thread', threadFilter.value);
+                if (roleFilter.value) params.append('role', roleFilter.value);
+                if (daysFilter.value) params.append('days', daysFilter.value);
+
+                const response = await fetch(`/api/search?${params}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                displayResults(data);
+                
+            } catch (error) {
+                console.error('Suchfehler:', error);
+                showError('Ein Fehler ist bei der Suche aufgetreten.');
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function displayResults(data) {
+            resultsCount.textContent = `${data.total_results} Ergebnisse für "${data.query}"`;
+            
+            if (data.total_results === 0) {
+                searchResults.innerHTML = '<div class="empty-state"><h3>Keine Ergebnisse gefunden</h3><p>Versuche andere Suchbegriffe oder ändere die Filter.</p></div>';
+            } else {
+                searchResults.innerHTML = data.results.map(result => renderSearchResult(result)).join('');
+                
+                // Export-Button aktivieren
+                const exportUrl = `/search/export?q=${encodeURIComponent(data.query)}${buildFilterParams()}`;
+                exportBtn.href = exportUrl;
+                exportBtn.style.display = 'inline-block';
+            }
+            
+            resultsContainer.style.display = 'block';
+            emptyState.style.display = 'none';
+        }
+
+        function renderSearchResult(result) {
+            const date = new Date(result.timestamp).toLocaleString('de-DE');
+            const contextHtml = result.context ? renderContext(result.context) : '';
+            
+            return `
+                <div class="search-result">
+                    <div class="result-header">
+                        <div class="result-meta">
+                            <span class="result-role role-${result.role}">${result.role === 'user' ? 'Du' : 'KI'}</span>
+                            <span>📁 ${result.thread_title}</span>
+                            <span>🕒 ${date}</span>
+                        </div>
+                    </div>
+                    <div class="result-content">
+                        <div class="result-snippet">${result.highlighted_content}</div>
+                        ${contextHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderContext(context) {
+            if (!context.before.length && !context.after.length) return '';
+            
+            let contextHtml = '<div class="result-context"><strong>Kontext:</strong><div class="context-messages">';
+            
+            context.before.forEach(msg => {
+                const shortContent = msg.content.length > 100 ? msg.content.substring(0, 100) + '...' : msg.content;
+                contextHtml += `<div class="context-message context-${msg.role}">
+                    <strong>${msg.role === 'user' ? 'Du' : 'KI'}:</strong> ${shortContent}
+                </div>`;
+            });
+            
+            context.after.forEach(msg => {
+                const shortContent = msg.content.length > 100 ? msg.content.substring(0, 100) + '...' : msg.content;
+                contextHtml += `<div class="context-message context-${msg.role}">
+                    <strong>${msg.role === 'user' ? 'Du' : 'KI'}:</strong> ${shortContent}
+                </div>`;
+            });
+            
+            contextHtml += '</div></div>';
+            return contextHtml;
+        }
+
+        function buildFilterParams() {
+            let params = '';
+            if (threadFilter.value) params += `&thread=${encodeURIComponent(threadFilter.value)}`;
+            if (roleFilter.value) params += `&role=${encodeURIComponent(roleFilter.value)}`;
+            if (daysFilter.value) params += `&days=${encodeURIComponent(daysFilter.value)}`;
+            return params;
+        }
+
+        function showLoading() {
+            loadingSpinner.style.display = 'block';
+            resultsContainer.style.display = 'none';
+            emptyState.style.display = 'none';
+        }
+
+        function hideLoading() {
+            loadingSpinner.style.display = 'none';
+        }
+
+        function showEmptyState() {
+            resultsContainer.style.display = 'none';
+            emptyState.style.display = 'block';
+            exportBtn.style.display = 'none';
+        }
+
+        function showError(message) {
+            searchResults.innerHTML = `<div class="empty-state"><h3>Fehler</h3><p>${message}</p></div>`;
+            resultsContainer.style.display = 'block';
+            emptyState.style.display = 'none';
+            exportBtn.style.display = 'none';
+        }
+    </script>
 </body>
 </html>

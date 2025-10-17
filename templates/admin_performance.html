@@ -37,6 +37,63 @@
             <i class="bi bi-speedometer2 me-2"></i>Performance Dashboard
         </h2>
 
+        <!-- Cache Performance Section -->
+        {% if cache_stats %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-hdd me-2"></i>Cache Performance
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-3 text-center">
+                        <h6 class="text-muted">Cache Entries</h6>
+                        <h4 class="text-info">{{ cache_stats.total_entries }}</h4>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <h6 class="text-muted">Memory Usage</h6>
+                        <h4 class="text-warning">{{ cache_stats.memory_usage_mb }}MB</h4>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <h6 class="text-muted">Status</h6>
+                        <h4 class="text-success">
+                            {% if cache_stats.total_entries > 0 %}
+                                <i class="bi bi-check-circle"></i> Aktiv
+                            {% else %}
+                                <i class="bi bi-dash-circle"></i> Leer
+                            {% endif %}
+                        </h4>
+                    </div>
+                    <div class="col-md-3 text-center">
+                        <h6 class="text-muted">Aktionen</h6>
+                        <form method="POST" action="/admin/clear-cache" style="display: inline;">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                                <i class="bi bi-trash"></i> Clear Cache
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                {% if cache_stats.cache_keys %}
+                <h6 class="mt-4 mb-3">Aktuelle Cache-Keys</h6>
+                <div class="row">
+                    {% for key in cache_stats.cache_keys[:10] %}
+                    <div class="col-md-6 col-lg-4 mb-2">
+                        <span class="badge bg-secondary">{{ key }}</span>
+                    </div>
+                    {% endfor %}
+                    {% if cache_stats.cache_keys|length > 10 %}
+                    <div class="col-12">
+                        <small class="text-muted">... und {{ cache_stats.cache_keys|length - 10 }} weitere</small>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Request Performance -->
         <div class="card mb-4">
             <div class="card-header">
@@ -92,6 +149,41 @@
                 {% endif %}
             </div>
         </div>
+
+        <!-- Recent Slow Requests -->
+        {% if stats and stats.recent_slow_requests %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-exclamation-triangle me-2"></i>Letzte langsame Requests
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Zeit</th>
+                                <th>Endpoint</th>
+                                <th>Dauer</th>
+                                <th>User Agent</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for req in stats.recent_slow_requests %}
+                            <tr>
+                                <td>{{ req.timestamp | int | timestamp_to_datetime }}</td>
+                                <td><code>{{ req.endpoint }}</code></td>
+                                <td><span class="badge bg-warning">{{ req.duration }}s</span></td>
+                                <td><small>{{ req.user_agent[:50] }}...</small></td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -100,6 +192,13 @@
         setInterval(function() {
             location.reload();
         }, 30000);
+
+        // Cache clear confirmation
+        document.querySelector('form[action="/admin/clear-cache"]').addEventListener('submit', function(e) {
+            if (!confirm('Cache wirklich leeren? Dies kann die Performance temporär verschlechtern.')) {
+                e.preventDefault();
+            }
+        });
     </script>
 </body>
 </html>
